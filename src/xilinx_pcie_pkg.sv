@@ -38,6 +38,15 @@ package xilinx_pcie_pkg;
     // PCIe TLP Monitor：监听 4 个 axis_agent 输出，将 AXI-Stream 包解码回 pcie_tl_tlp
     `include "agent/xilinx_pcie_monitor.sv"
 
+    // 基础 Agent：组合 4 个 axis_agent、driver、monitor 及 TL 层共享管理器
+    `include "agent/xilinx_pcie_base_agent.sv"
+
+    // RC Agent：Root Complex 特化，支持 Completion 超时追踪和 BAR 地址分配
+    `include "agent/xilinx_pcie_rc_agent.sv"
+
+    // EP Agent：Endpoint 特化，支持自动回复、内存模型和 DMA 发起
+    `include "agent/xilinx_pcie_ep_agent.sv"
+
     // 后续 Task 中将在此处追加以下 include：
     // `include "cfg/xilinx_pcie_cfg.sv"
     // `include "agent/xilinx_pcie_agent.sv"
