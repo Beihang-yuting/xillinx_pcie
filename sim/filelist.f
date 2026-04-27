@@ -49,8 +49,13 @@
 // 顶层 package（包含所有类型、类、codec、agent、env、seq 定义）
 /home/ubuntu/ryan/xilinx_pcie/src/xilinx_pcie_pkg.sv
 
-// 测试平台顶层（TB top module，实例化 DUT 和 BFM，后续 Task 创建）
-/home/ubuntu/ryan/xilinx_pcie/tb/xilinx_pcie_tb_top.sv
+// 测试平台文件（TB modules）
+// 回环 DUT：将 RC/EP 四通道交叉连线
+/home/ubuntu/ryan/xilinx_pcie/tb/xilinx_pcie_loopback_dut.sv
+// 回环仿真顶层（默认编译目标）
+/home/ubuntu/ryan/xilinx_pcie/tb/tb_top.sv
+// 真实 DUT 连接模板（连接到 Xilinx PCIe IP 时使用，替换 tb_top.sv）
+// /home/ubuntu/ryan/xilinx_pcie/tb/tb_with_dut.sv
 
 // 测试用例文件（各 test class，后续 Task 创建）
 /home/ubuntu/ryan/xilinx_pcie/tests/xilinx_pcie_base_test.sv
