@@ -65,7 +65,22 @@ package xilinx_pcie_pkg;
     // 顶层环境：组装 RC/EP agent、scoreboard、coverage、virtual sequencer
     `include "env/xilinx_pcie_env.sv"
 
-    // 后续 Task 中将在此处追加以下 include：
-    // `include "seq/xilinx_pcie_base_seq.sv"
+    // 序列库：基础序列（所有序列的公共基类，提供 cfg 自动获取）
+    `include "seq/xilinx_pcie_base_seq.sv"
+
+    // 序列库：Memory Read/Write 序列（单次 MRd/MWr，自动计算 BE）
+    `include "seq/xilinx_pcie_mem_seq.sv"
+
+    // 序列库：Config Read/Write 序列（CfgRd0/CfgRd1/CfgWr0/CfgWr1）
+    `include "seq/xilinx_pcie_cfg_seq.sv"
+
+    // 序列库：DMA 序列（EP 发起，自动按 MPS/MRRS 和 4KB 边界分割）
+    `include "seq/xilinx_pcie_dma_seq.sv"
+
+    // 序列库：中断序列（通过 cfg_interrupt 侧带发送 Legacy/MSI/MSI-X）
+    `include "seq/xilinx_pcie_msi_seq.sv"
+
+    // 序列库：回环虚拟序列（5 阶段：Config/MemRW/DMA/中断/Straddle 压力）
+    `include "seq/xilinx_pcie_loopback_vseq.sv"
 
 endpackage : xilinx_pcie_pkg
