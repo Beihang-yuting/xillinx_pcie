@@ -294,8 +294,9 @@ class xilinx_pcie_driver extends uvm_driver #(pcie_tl_tlp);
             xfer.tlast = lasts[i];
             xfer.tuser = tuser_val;
 
-            // 延迟设为 0（不插入额外空闲周期）
-            xfer.delay = 0;
+            // 首 beat 插入 1 周期空闲，保证 tlast=1 后 tvalid 至少低 1 拍
+            // 防止 axis_monitor 将前一 TLP 的 tlast 与后一 TLP 的首 beat 合并
+            xfer.delay = (i == 0) ? 1 : 0;
 
             // -----------------------------------------------------------------
             // 步骤 8：通过 axis_sequencer 发送
@@ -307,7 +308,12 @@ class xilinx_pcie_driver extends uvm_driver #(pcie_tl_tlp);
                 oneshot = axis_oneshot_seq::type_id::create(
                     $sformatf("oneshot_%s_%0d", channel.name(), i));
                 oneshot.xfer = xfer;
+                `uvm_info(get_type_name(),
+                    $sformatf("DEBUG: oneshot.start on sqr=%s, beat[%0d]",
+                        sqr.get_full_name(), i), UVM_LOW)
                 oneshot.start(sqr);
+                `uvm_info(get_type_name(),
+                    $sformatf("DEBUG: oneshot done, beat[%0d]", i), UVM_LOW)
             end
 
             `uvm_info(get_type_name(),

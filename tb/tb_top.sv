@@ -106,145 +106,172 @@ module tb_top;
 
     //=========================================================================
     // axis_if 实例化（RC/EP 各 4 条通道，共 8 个实例）
-    // axis_if 的 tkeep 为 per-byte 宽度（TDATA_WIDTH/8），
-    // 连接到 xilinx_pcie_if 时只取低 KEEP_WIDTH 位（per-DW）
+    // 使用 axis_if 默认参数（TDATA_WIDTH=512, TUSER_WIDTH=512），
+    // 保证所有 virtual axis_if 类型一致，避免参数化类型不匹配。
+    // 桥接层负责处理实际 PCIe 位宽（256bit）与 axis_if 位宽（512bit）的转换。
     //=========================================================================
 
     // RC 侧 RQ 通道（RC agent 作为 SLAVE，接收 EP DMA 请求）
-    axis_if #(
-        .TDATA_WIDTH (DATA_WIDTH),
-        .TUSER_WIDTH (RQ_TUSER_WIDTH),
-        .HAS_TKEEP   (1),
-        .HAS_TLAST   (1)
-    ) rc_rq_if (.aclk(clk), .aresetn(rst_n));
+    // 使用 axis_if 默认参数（512/512），与 virtual axis_if 类型匹配
+    axis_if rc_rq_if (.aclk(clk), .aresetn(rst_n));
 
     // RC 侧 RC 通道（RC agent 作为 MASTER，驱动完成数据到 EP）
-    axis_if #(
-        .TDATA_WIDTH (DATA_WIDTH),
-        .TUSER_WIDTH (RC_TUSER_WIDTH),
-        .HAS_TKEEP   (1),
-        .HAS_TLAST   (1)
-    ) rc_rc_if (.aclk(clk), .aresetn(rst_n));
+    axis_if rc_rc_if (.aclk(clk), .aresetn(rst_n));
 
     // RC 侧 CQ 通道（RC agent 作为 MASTER，驱动请求到 EP）
-    axis_if #(
-        .TDATA_WIDTH (DATA_WIDTH),
-        .TUSER_WIDTH (CQ_TUSER_WIDTH),
-        .HAS_TKEEP   (1),
-        .HAS_TLAST   (1)
-    ) rc_cq_if (.aclk(clk), .aresetn(rst_n));
+    axis_if rc_cq_if (.aclk(clk), .aresetn(rst_n));
 
     // RC 侧 CC 通道（RC agent 作为 SLAVE，接收 EP 完成数据）
-    axis_if #(
-        .TDATA_WIDTH (DATA_WIDTH),
-        .TUSER_WIDTH (CC_TUSER_WIDTH),
-        .HAS_TKEEP   (1),
-        .HAS_TLAST   (1)
-    ) rc_cc_if (.aclk(clk), .aresetn(rst_n));
+    axis_if rc_cc_if (.aclk(clk), .aresetn(rst_n));
 
     // EP 侧 RQ 通道（EP agent 作为 MASTER，驱动 DMA 请求）
-    axis_if #(
-        .TDATA_WIDTH (DATA_WIDTH),
-        .TUSER_WIDTH (RQ_TUSER_WIDTH),
-        .HAS_TKEEP   (1),
-        .HAS_TLAST   (1)
-    ) ep_rq_if (.aclk(clk), .aresetn(rst_n));
+    axis_if ep_rq_if (.aclk(clk), .aresetn(rst_n));
 
     // EP 侧 RC 通道（EP agent 作为 SLAVE，接收 RC 完成数据）
-    axis_if #(
-        .TDATA_WIDTH (DATA_WIDTH),
-        .TUSER_WIDTH (RC_TUSER_WIDTH),
-        .HAS_TKEEP   (1),
-        .HAS_TLAST   (1)
-    ) ep_rc_if (.aclk(clk), .aresetn(rst_n));
+    axis_if ep_rc_if (.aclk(clk), .aresetn(rst_n));
 
     // EP 侧 CQ 通道（EP agent 作为 SLAVE，接收 RC 转发的请求）
-    axis_if #(
-        .TDATA_WIDTH (DATA_WIDTH),
-        .TUSER_WIDTH (CQ_TUSER_WIDTH),
-        .HAS_TKEEP   (1),
-        .HAS_TLAST   (1)
-    ) ep_cq_if (.aclk(clk), .aresetn(rst_n));
+    axis_if ep_cq_if (.aclk(clk), .aresetn(rst_n));
 
     // EP 侧 CC 通道（EP agent 作为 MASTER，驱动完成数据到 RC）
-    axis_if #(
-        .TDATA_WIDTH (DATA_WIDTH),
-        .TUSER_WIDTH (CC_TUSER_WIDTH),
-        .HAS_TKEEP   (1),
-        .HAS_TLAST   (1)
-    ) ep_cc_if (.aclk(clk), .aresetn(rst_n));
+    axis_if ep_cc_if (.aclk(clk), .aresetn(rst_n));
 
     //=========================================================================
     // axis_if <-> xilinx_pcie_if 信号桥接
-    // tkeep 位宽差异处理：
-    //   axis_if.tkeep 宽度 = DATA_WIDTH/8（per-byte）
-    //   xilinx_pcie_if.*_tkeep 宽度 = DATA_WIDTH/32（per-DW）
-    //   SLAVE 方向（接收）：axis_if.tkeep = {0填充, pcie_if.tkeep}
-    //   MASTER 方向（发送）：pcie_if.tkeep = axis_if.tkeep[KEEP_WIDTH-1:0]
+    // axis_if 使用默认参数（TDATA_WIDTH=512, TUSER_WIDTH=512），
+    // xilinx_pcie_if 使用实际 PCIe 位宽（DATA_WIDTH=256, tuser 各通道不同）。
+    // 桥接时需要做位宽截取/零填充：
+    //   tdata: axis_if(512) <-> pcie_if(256)，高位补零/截取低位
+    //   tkeep: axis_if(64=512/8) <-> pcie_if(8=256/32)，per-DW keep
+    //   tuser: axis_if(512) <-> pcie_if(各通道不同)，高位补零/截取低位
+    //   SLAVE 方向（接收）：axis_if = {0填充, pcie_if信号}
+    //   MASTER 方向（发送）：pcie_if信号 = axis_if[低位]
+    //=========================================================================
+    // axis_if 默认位宽常量
+    localparam int AXIS_TDATA_WIDTH = 512;
+    localparam int AXIS_TKEEP_WIDTH = AXIS_TDATA_WIDTH / 8;  // 64
+    localparam int AXIS_TUSER_WIDTH = 512;
+
+    //=========================================================================
+    // tkeep 格式转换辅助信号
+    // xilinx_pcie_if 使用 per-DW tkeep（KEEP_WIDTH=8 位，每位对应一个 32-bit DW）
+    // axis_if 使用 per-byte tkeep（AXIS_TKEEP_WIDTH=64 位，每位对应一个字节）
+    //
+    // MASTER 方向（axis_if -> xilinx_pcie_if）：
+    //   将 per-byte tkeep 压缩为 per-DW tkeep（每 4 个 byte 位合并为 1 个 DW 位）
+    // SLAVE 方向（xilinx_pcie_if -> axis_if）：
+    //   将 per-DW tkeep 展开为 per-byte tkeep（每 1 个 DW 位展开为 4 个 byte 位）
     //=========================================================================
 
+    // --- per-byte -> per-DW 压缩函数（MASTER 方向使用） ---
+    // 从 axis_if 的 64-bit per-byte tkeep 中提取有效 DW 个数
+    function automatic logic [KEEP_WIDTH-1:0] byte_keep_to_dw_keep(
+        input logic [AXIS_TKEEP_WIDTH-1:0] byte_keep
+    );
+        logic [KEEP_WIDTH-1:0] dw_keep;
+        // 遍历每个 DW 位置，只要 4 字节中任一有效则该 DW 有效
+        for (int dw = 0; dw < KEEP_WIDTH; dw++) begin
+            dw_keep[dw] = |byte_keep[dw*4 +: 4];
+        end
+        return dw_keep;
+    endfunction
+
+    // --- per-DW -> per-byte 展开函数（SLAVE 方向使用） ---
+    // 将 per-DW tkeep 的每个位展开为对应的 4 个 byte 位
+    function automatic logic [AXIS_TKEEP_WIDTH-1:0] dw_keep_to_byte_keep(
+        input logic [KEEP_WIDTH-1:0] dw_keep
+    );
+        logic [AXIS_TKEEP_WIDTH-1:0] byte_keep;
+        byte_keep = '0;
+        for (int dw = 0; dw < KEEP_WIDTH; dw++) begin
+            if (dw_keep[dw])
+                byte_keep[dw*4 +: 4] = 4'hF;
+        end
+        return byte_keep;
+    endfunction
+
+    // --- 各通道 per-DW tkeep 中间信号 ---
+    logic [KEEP_WIDTH-1:0] rc_rc_dw_keep;  // RC-RC MASTER: axis per-byte -> per-DW
+    logic [KEEP_WIDTH-1:0] rc_cq_dw_keep;  // RC-CQ MASTER: axis per-byte -> per-DW
+    logic [KEEP_WIDTH-1:0] ep_rq_dw_keep;  // EP-RQ MASTER: axis per-byte -> per-DW
+    logic [KEEP_WIDTH-1:0] ep_cc_dw_keep;  // EP-CC MASTER: axis per-byte -> per-DW
+
+    // MASTER 方向：从 axis_if per-byte tkeep 压缩为 per-DW tkeep
+    always_comb rc_rc_dw_keep = byte_keep_to_dw_keep(rc_rc_if.tkeep);
+    always_comb rc_cq_dw_keep = byte_keep_to_dw_keep(rc_cq_if.tkeep);
+    always_comb ep_rq_dw_keep = byte_keep_to_dw_keep(ep_rq_if.tkeep);
+    always_comb ep_cc_dw_keep = byte_keep_to_dw_keep(ep_cc_if.tkeep);
+
     // RC-RQ：axis SLAVE（接收来自 loopback_dut 的 ep->rc rq 数据）
-    assign rc_rq_if.tdata              = rc_if.rq_tdata;
-    assign rc_rq_if.tkeep              = { {(DATA_WIDTH/8-KEEP_WIDTH){1'b0}}, rc_if.rq_tkeep };
+    // SLAVE 方向：per-DW tkeep 展开为 per-byte tkeep
+    assign rc_rq_if.tdata              = { {(AXIS_TDATA_WIDTH-DATA_WIDTH){1'b0}}, rc_if.rq_tdata };
+    assign rc_rq_if.tkeep              = dw_keep_to_byte_keep(rc_if.rq_tkeep);
     assign rc_rq_if.tlast              = rc_if.rq_tlast;
     assign rc_rq_if.tvalid             = rc_if.rq_tvalid;
-    assign rc_rq_if.tuser              = rc_if.rq_tuser;
+    assign rc_rq_if.tuser              = { {(AXIS_TUSER_WIDTH-RQ_TUSER_WIDTH){1'b0}}, rc_if.rq_tuser };
     assign rc_if.rq_tready             = rc_rq_if.tready;
 
     // RC-RC：axis MASTER（向 ep_if.rc_* 驱动完成数据，经 loopback_dut 转发给 EP）
-    assign rc_if.rc_tdata              = rc_rc_if.tdata;
-    assign rc_if.rc_tkeep              = rc_rc_if.tkeep[KEEP_WIDTH-1:0];
+    // MASTER 方向：per-byte tkeep 压缩为 per-DW tkeep
+    assign rc_if.rc_tdata              = rc_rc_if.tdata[DATA_WIDTH-1:0];
+    assign rc_if.rc_tkeep              = rc_rc_dw_keep;
     assign rc_if.rc_tlast              = rc_rc_if.tlast;
     assign rc_if.rc_tvalid             = rc_rc_if.tvalid;
-    assign rc_if.rc_tuser              = rc_rc_if.tuser;
+    assign rc_if.rc_tuser              = rc_rc_if.tuser[RC_TUSER_WIDTH-1:0];
     assign rc_rc_if.tready             = rc_if.rc_tready;
 
     // RC-CQ：axis MASTER（向 ep_if.cq_* 驱动请求，经 loopback_dut 转发给 EP）
-    assign rc_if.cq_tdata              = rc_cq_if.tdata;
-    assign rc_if.cq_tkeep              = rc_cq_if.tkeep[KEEP_WIDTH-1:0];
+    // MASTER 方向：per-byte tkeep 压缩为 per-DW tkeep
+    assign rc_if.cq_tdata              = rc_cq_if.tdata[DATA_WIDTH-1:0];
+    assign rc_if.cq_tkeep              = rc_cq_dw_keep;
     assign rc_if.cq_tlast              = rc_cq_if.tlast;
     assign rc_if.cq_tvalid             = rc_cq_if.tvalid;
-    assign rc_if.cq_tuser              = rc_cq_if.tuser;
+    assign rc_if.cq_tuser              = rc_cq_if.tuser[CQ_TUSER_WIDTH-1:0];
     assign rc_cq_if.tready             = rc_if.cq_tready;
 
     // RC-CC：axis SLAVE（接收来自 loopback_dut 的 ep->rc cc 完成数据）
-    assign rc_cc_if.tdata              = rc_if.cc_tdata;
-    assign rc_cc_if.tkeep              = { {(DATA_WIDTH/8-KEEP_WIDTH){1'b0}}, rc_if.cc_tkeep };
+    // SLAVE 方向：per-DW tkeep 展开为 per-byte tkeep
+    assign rc_cc_if.tdata              = { {(AXIS_TDATA_WIDTH-DATA_WIDTH){1'b0}}, rc_if.cc_tdata };
+    assign rc_cc_if.tkeep              = dw_keep_to_byte_keep(rc_if.cc_tkeep);
     assign rc_cc_if.tlast              = rc_if.cc_tlast;
     assign rc_cc_if.tvalid             = rc_if.cc_tvalid;
-    assign rc_cc_if.tuser              = rc_if.cc_tuser;
+    assign rc_cc_if.tuser              = { {(AXIS_TUSER_WIDTH-CC_TUSER_WIDTH){1'b0}}, rc_if.cc_tuser };
     assign rc_if.cc_tready             = rc_cc_if.tready;
 
     // EP-RQ：axis MASTER（EP 向 rc_if.rq_* 驱动 DMA 请求）
-    assign ep_if.rq_tdata              = ep_rq_if.tdata;
-    assign ep_if.rq_tkeep              = ep_rq_if.tkeep[KEEP_WIDTH-1:0];
+    // MASTER 方向：per-byte tkeep 压缩为 per-DW tkeep
+    assign ep_if.rq_tdata              = ep_rq_if.tdata[DATA_WIDTH-1:0];
+    assign ep_if.rq_tkeep              = ep_rq_dw_keep;
     assign ep_if.rq_tlast              = ep_rq_if.tlast;
     assign ep_if.rq_tvalid             = ep_rq_if.tvalid;
-    assign ep_if.rq_tuser              = ep_rq_if.tuser;
+    assign ep_if.rq_tuser              = ep_rq_if.tuser[RQ_TUSER_WIDTH-1:0];
     assign ep_rq_if.tready             = ep_if.rq_tready;
 
     // EP-RC：axis SLAVE（EP 接收来自 loopback_dut 的 rc->ep rc 完成数据）
-    assign ep_rc_if.tdata              = ep_if.rc_tdata;
-    assign ep_rc_if.tkeep              = { {(DATA_WIDTH/8-KEEP_WIDTH){1'b0}}, ep_if.rc_tkeep };
+    // SLAVE 方向：per-DW tkeep 展开为 per-byte tkeep
+    assign ep_rc_if.tdata              = { {(AXIS_TDATA_WIDTH-DATA_WIDTH){1'b0}}, ep_if.rc_tdata };
+    assign ep_rc_if.tkeep              = dw_keep_to_byte_keep(ep_if.rc_tkeep);
     assign ep_rc_if.tlast              = ep_if.rc_tlast;
     assign ep_rc_if.tvalid             = ep_if.rc_tvalid;
-    assign ep_rc_if.tuser              = ep_if.rc_tuser;
+    assign ep_rc_if.tuser              = { {(AXIS_TUSER_WIDTH-RC_TUSER_WIDTH){1'b0}}, ep_if.rc_tuser };
     assign ep_if.rc_tready             = ep_rc_if.tready;
 
     // EP-CQ：axis SLAVE（EP 接收来自 loopback_dut 的 rc->ep cq 请求数据）
-    assign ep_cq_if.tdata              = ep_if.cq_tdata;
-    assign ep_cq_if.tkeep              = { {(DATA_WIDTH/8-KEEP_WIDTH){1'b0}}, ep_if.cq_tkeep };
+    // SLAVE 方向：per-DW tkeep 展开为 per-byte tkeep
+    assign ep_cq_if.tdata              = { {(AXIS_TDATA_WIDTH-DATA_WIDTH){1'b0}}, ep_if.cq_tdata };
+    assign ep_cq_if.tkeep              = dw_keep_to_byte_keep(ep_if.cq_tkeep);
     assign ep_cq_if.tlast              = ep_if.cq_tlast;
     assign ep_cq_if.tvalid             = ep_if.cq_tvalid;
-    assign ep_cq_if.tuser              = ep_if.cq_tuser;
+    assign ep_cq_if.tuser              = { {(AXIS_TUSER_WIDTH-CQ_TUSER_WIDTH){1'b0}}, ep_if.cq_tuser };
     assign ep_if.cq_tready             = ep_cq_if.tready;
 
     // EP-CC：axis MASTER（EP 向 rc_if.cc_* 驱动完成数据）
-    assign ep_if.cc_tdata              = ep_cc_if.tdata;
-    assign ep_if.cc_tkeep              = ep_cc_if.tkeep[KEEP_WIDTH-1:0];
+    // MASTER 方向：per-byte tkeep 压缩为 per-DW tkeep
+    assign ep_if.cc_tdata              = ep_cc_if.tdata[DATA_WIDTH-1:0];
+    assign ep_if.cc_tkeep              = ep_cc_dw_keep;
     assign ep_if.cc_tlast              = ep_cc_if.tlast;
     assign ep_if.cc_tvalid             = ep_cc_if.tvalid;
-    assign ep_if.cc_tuser              = ep_cc_if.tuser;
+    assign ep_if.cc_tuser              = ep_cc_if.tuser[CC_TUSER_WIDTH-1:0];
     assign ep_cc_if.tready             = ep_if.cc_tready;
 
     //=========================================================================
@@ -317,11 +344,18 @@ module tb_top;
     //=========================================================================
     initial begin
         if ($test$plusargs("DUMP_WAVES")) begin
-            $vcdplusfile("tb_top.vpd");
-            $vcdpluson(0, tb_top);
-            $display("[tb_top] 波形录制已启动 -> tb_top.vpd");
+            $dumpfile("tb_top.vcd");
+            $dumpvars(0, tb_top);
+            $display("[tb_top] 波形录制已启动 -> tb_top.vcd");
         end
     end
+
+    //=========================================================================
+    // tready 说明：
+    // 修正 agent_mode 映射后，SLAVE 通道的 axis_slave_driver 会正确驱动 tready，
+    // MASTER 通道的 tready 由对端 SLAVE 驱动或由 loopback_dut 反压控制。
+    // 不再需要 force tready debug hack。
+    //=========================================================================
 
     //=========================================================================
     // 仿真超时保护（10ms 硬限制，防止 UVM objection 未释放导致永久挂起）

@@ -33,11 +33,16 @@ endclass : tlp_oneshot_seq
 
 class xilinx_pcie_ep_agent extends xilinx_pcie_base_agent;
 
+    // 声明 analysis_imp，用于订阅 monitor 的 tlp_rx_ap 实现自动响应
     `uvm_component_utils(xilinx_pcie_ep_agent)
+    typedef uvm_analysis_imp #(pcie_tl_tlp, xilinx_pcie_ep_agent) tlp_rx_imp_t;
 
     //=========================================================================
     // EP 特有成员
     //=========================================================================
+
+    // 接收 TLP 的 analysis imp（连接到 monitor.tlp_rx_ap）
+    tlp_rx_imp_t                    rx_imp;
 
     // 稀疏内存模型：地址 -> 字节数据
     bit [7:0]                       mem_space[bit [63:0]];
@@ -54,6 +59,36 @@ class xilinx_pcie_ep_agent extends xilinx_pcie_base_agent;
     function new(string name, uvm_component parent);
         super.new(name, parent);
     endfunction : new
+
+    //=========================================================================
+    // build_phase：创建 analysis imp
+    //=========================================================================
+    virtual function void build_phase(uvm_phase phase);
+        super.build_phase(phase);
+        // 创建 analysis imp 用于接收 monitor 解码后的 TLP
+        rx_imp = new("rx_imp", this);
+    endfunction : build_phase
+
+    //=========================================================================
+    // connect_phase：将 monitor 的 tlp_rx_ap 连接到 rx_imp
+    //=========================================================================
+    virtual function void connect_phase(uvm_phase phase);
+        super.connect_phase(phase);
+        // 订阅 monitor 的 TLP 接收分析端口，触发自动响应
+        monitor.tlp_rx_ap.connect(rx_imp);
+    endfunction : connect_phase
+
+    //=========================================================================
+    // write：uvm_analysis_imp 回调，接收解码后的 TLP 并分发到 handle_rx_tlp
+    //=========================================================================
+    function void write(pcie_tl_tlp t);
+        // 调试：记录每次 write() 回调触发，确认 analysis_imp 连接正常
+        `uvm_info(get_type_name(),
+            $sformatf("write() 回调: kind=%s, tag=0x%03h, payload=%0d bytes",
+                t.kind.name(), t.tag, t.payload.size()),
+            UVM_MEDIUM)
+        handle_rx_tlp(t);
+    endfunction : write
 
     //=========================================================================
     // run_phase：若启用自动响应，fork 后台 completion 发送任务
@@ -373,6 +408,11 @@ class xilinx_pcie_ep_agent extends xilinx_pcie_base_agent;
     function void send_completion(pcie_tl_cpl_tlp cpl);
         if (is_active == UVM_ACTIVE) begin
             cpl_send_queue.push_back(cpl);
+            // 调试：记录 completion 入队，跟踪队列深度
+            `uvm_info(get_type_name(),
+                $sformatf("send_completion: tag=0x%03h 入队, 队列深度=%0d",
+                    cpl.tag, cpl_send_queue.size()),
+                UVM_MEDIUM)
         end else begin
             `uvm_warning(get_type_name(),
                 "EP agent 处于 PASSIVE 模式，无法发送 Completion")
@@ -402,13 +442,13 @@ class xilinx_pcie_ep_agent extends xilinx_pcie_base_agent;
             end
 
             // 通过 one-shot sequence 在 sequencer 上发送 Completion
-            // （不能直接调用 sequencer 的低级 API）
+            // 注意：不使用 clone()，因为 pcie_tl_cpl_tlp 未实现 do_copy()，
+            // clone 会丢失所有字段值（kind 回退到默认 TLP_MEM_RD）。
+            // cpl 已从队列 pop 出来，可直接使用，无需克隆。
             begin
-                pcie_tl_cpl_tlp cpl_clone;
                 tlp_oneshot_seq oneshot;
-                $cast(cpl_clone, cpl.clone());
                 oneshot = tlp_oneshot_seq::type_id::create("cpl_oneshot");
-                oneshot.tlp_item = cpl_clone;
+                oneshot.tlp_item = cpl;
                 oneshot.start(sequencer);
             end
 

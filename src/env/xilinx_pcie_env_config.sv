@@ -62,7 +62,8 @@ class xilinx_pcie_env_config extends uvm_object;
     // 流量控制使能：关闭后跳过 FC credit 检查
     bit                         fc_enable           = 1'b1;
     // 无限 Credit 模式：仿真加速用，跳过 credit 耗尽等待
-    bit                         infinite_credit     = 1'b0;
+    // 默认无限 credit，避免回环 BFM 因缺少 credit 回收机制而阻塞
+    bit                         infinite_credit     = 1'b1;
     // Posted Header Credit 初始值
     int                         init_ph_credit      = 32;
     // Posted Data Credit 初始值（单位：4B）
@@ -377,30 +378,31 @@ class xilinx_pcie_env_config extends uvm_object;
         cfg.pkt_boundary_mode = PKT_BOUNDARY_TLAST;
 
         // 步骤 5：根据 role + channel 设置 agent_mode
-        // RC 角色：
-        //   RQ -> AXIS_MASTER（RC 是 RQ 通道的发起方）
-        //   RC -> AXIS_SLAVE （RC 是 RC 通道的接收方）
-        //   CQ -> AXIS_SLAVE （RC 侧对 CQ 通道为接收/监听）
-        //   CC -> AXIS_MASTER（RC 侧对 CC 通道为发送）
-        // EP 角色：
-        //   RQ -> AXIS_SLAVE （EP 侧对 RQ 通道为接收方）
-        //   RC -> AXIS_MASTER（EP 是 RC 通道的发起方）
-        //   CQ -> AXIS_MASTER（EP 是 CQ 通道的发起方）
-        //   CC -> AXIS_SLAVE （EP 是 CC 通道的接收方）
+        // 在回环 BFM 中，RC agent 模拟链路侧（IP 侧），EP agent 模拟用户侧。
+        // RC 角色（模拟链路侧，向 EP 驱动 CQ/RC，从 EP 接收 RQ/CC）：
+        //   RQ -> AXIS_SLAVE （接收 EP 发来的 DMA 请求）
+        //   RC -> AXIS_MASTER（向 EP 驱动完成数据）
+        //   CQ -> AXIS_MASTER（向 EP 驱动请求）
+        //   CC -> AXIS_SLAVE （接收 EP 发来的完成数据）
+        // EP 角色（标准用户侧视角）：
+        //   RQ -> AXIS_MASTER（EP 发送 DMA 请求）
+        //   RC -> AXIS_SLAVE （EP 接收完成数据）
+        //   CQ -> AXIS_SLAVE （EP 接收来自 RC 的请求）
+        //   CC -> AXIS_MASTER（EP 发送完成数据）
         if (role == XILINX_PCIE_RC) begin
-            case (ch)
-                XILINX_CH_RQ: cfg.agent_mode = AXIS_MASTER;
-                XILINX_CH_RC: cfg.agent_mode = AXIS_SLAVE;
-                XILINX_CH_CQ: cfg.agent_mode = AXIS_SLAVE;
-                XILINX_CH_CC: cfg.agent_mode = AXIS_MASTER;
-                default: cfg.agent_mode = AXIS_MASTER;
-            endcase
-        end else begin  // XILINX_PCIE_EP
             case (ch)
                 XILINX_CH_RQ: cfg.agent_mode = AXIS_SLAVE;
                 XILINX_CH_RC: cfg.agent_mode = AXIS_MASTER;
                 XILINX_CH_CQ: cfg.agent_mode = AXIS_MASTER;
                 XILINX_CH_CC: cfg.agent_mode = AXIS_SLAVE;
+                default: cfg.agent_mode = AXIS_MASTER;
+            endcase
+        end else begin  // XILINX_PCIE_EP
+            case (ch)
+                XILINX_CH_RQ: cfg.agent_mode = AXIS_MASTER;
+                XILINX_CH_RC: cfg.agent_mode = AXIS_SLAVE;
+                XILINX_CH_CQ: cfg.agent_mode = AXIS_SLAVE;
+                XILINX_CH_CC: cfg.agent_mode = AXIS_MASTER;
                 default: cfg.agent_mode = AXIS_MASTER;
             endcase
         end

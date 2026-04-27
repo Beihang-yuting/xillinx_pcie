@@ -138,10 +138,10 @@ class xilinx_pcie_coverage extends uvm_subscriber #(pcie_tl_tlp);
 
         // DW 计数分段
         cp_dw_count: coverpoint sampled_dw_count {
-            bins single     = {1};
-            bins small      = {[2:16]};
-            bins medium     = {[17:128]};
-            bins large      = {[129:512]};
+            bins dw_single  = {1};
+            bins dw_small   = {[2:16]};
+            bins dw_medium  = {[17:128]};
+            bins dw_large   = {[129:512]};
             bins max_range  = {[513:1023]};
             bins max_1024   = {0};          // 0 表示 1024 DW
         }

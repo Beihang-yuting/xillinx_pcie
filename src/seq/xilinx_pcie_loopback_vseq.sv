@@ -117,37 +117,25 @@ class xilinx_pcie_loopback_vseq extends uvm_sequence;
     // 在 rc_sqr 上执行若干 CfgRd0 读取配置空间关键寄存器
     //=========================================================================
     protected virtual task _phase_config_enum();
-        int cfg_reg_addrs[] = '{
-            10'h000,    // Vendor ID / Device ID (DW 0)
-            10'h001,    // Status / Command (DW 1)
-            10'h002,    // Class Code / Revision ID (DW 2)
-            10'h003,    // BIST / Header Type / Latency / Cache Line (DW 3)
-            10'h004,    // BAR0 (DW 4)
-            10'h005     // BAR1 (DW 5)
-        };
-
+        // PG213 中 Config 请求走 cfg_mgmt 侧带接口，不走 AXIS 数据通道
+        // 阶段 1 改为通过 CQ 通道发送简单的 MRd 请求来验证通路
         if (v_sqr.rc_sqr == null) begin
             `uvm_warning(get_type_name(),
-                "阶段 1: rc_sqr 为 null，跳过 Config 枚举")
+                "阶段 1: rc_sqr 为 null，跳过")
             return;
         end
 
-        foreach (cfg_reg_addrs[i]) begin
-            xilinx_pcie_cfg_seq cfg_seq;
-            cfg_seq = xilinx_pcie_cfg_seq::type_id::create(
-                $sformatf("cfg_rd_%0d", i));
-            cfg_seq.reg_addr   = cfg_reg_addrs[i];
-            cfg_seq.is_write   = 1'b0;
-            cfg_seq.is_type1   = 1'b0;
-            cfg_seq.first_be   = 4'hF;
-            cfg_seq.target_bdf = 16'h0100;  // Bus=1, Dev=0, Func=0
-            cfg_seq.cfg        = cfg;
-            cfg_seq.start(v_sqr.rc_sqr);
+        begin
+            xilinx_pcie_mem_seq mem_seq;
+            mem_seq = xilinx_pcie_mem_seq::type_id::create("enum_rd");
+            mem_seq.addr     = 64'h0000_0001_0000_0000;  // BAR0 基地址
+            mem_seq.length   = 4;                          // 读 4 字节
+            mem_seq.is_write = 0;
+            mem_seq.cfg      = cfg;
+            mem_seq.start(v_sqr.rc_sqr);
         end
 
-        `uvm_info(get_type_name(),
-            $sformatf("阶段 1 完成: 发送 %0d 个 CfgRd0", cfg_reg_addrs.size()),
-            UVM_MEDIUM)
+        `uvm_info(get_type_name(), "阶段 1 完成: 发送枚举 MRd", UVM_MEDIUM)
     endtask : _phase_config_enum
 
     //=========================================================================
@@ -190,6 +178,9 @@ class xilinx_pcie_loopback_vseq extends uvm_sequence;
                 wr_seq.wr_data[j] = (i + j) & 8'hFF;
 
             wr_seq.start(v_sqr.rc_sqr);
+
+            // 等待 EP 处理完 MWr（Posted 无 completion，需等 EP 写入内存后再读）
+            #500ns;
 
             // --- MRd ---
             rd_seq = xilinx_pcie_mem_seq::type_id::create(

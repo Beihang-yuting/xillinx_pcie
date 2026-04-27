@@ -41,11 +41,18 @@ class xilinx_pcie_sanity_test extends xilinx_pcie_base_test;
         // 创建回环虚拟序列实例
         vseq = xilinx_pcie_loopback_vseq::type_id::create("vseq");
 
-        // 冒烟测试：20 笔事务，使用默认 max_payload_bytes=256
+        // 冒烟测试：20 笔事务，max_payload_bytes=64（短包加速仿真）
         vseq.num_transactions = 20;
+        vseq.max_payload_bytes = 64;
 
         // 在 env.v_sqr（xilinx_pcie_virtual_sequencer）上启动序列
         vseq.start(env.v_sqr);
+
+        `uvm_info(get_type_name(), "===== Sanity Test 序列完成，等待 EP 完成回复 =====", UVM_LOW)
+
+        // 等待 EP 的 CplD 响应全部传输完毕（drain time）
+        // 20 对 MWr+MRd，每对 500ns 间隔 + EP 响应延迟，需较长 drain
+        #50us;
 
         `uvm_info(get_type_name(), "===== Sanity Test 完成 =====", UVM_LOW)
 

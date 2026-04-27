@@ -117,6 +117,8 @@ class xilinx_pcie_base_agent extends uvm_agent;
         // -----------------------------------------------------------------
         // 步骤 2：创建编解码器和路由器
         // -----------------------------------------------------------------
+        `uvm_info(get_type_name(),
+            $sformatf("DEBUG cfg.role=%s for %s", cfg.role.name(), get_full_name()), UVM_LOW)
         tuser_codec  = new(cfg.DATA_WIDTH);
         straddle_eng = new(cfg.straddle_enable, cfg.DATA_WIDTH);
         router       = new(cfg.role);
@@ -192,6 +194,25 @@ class xilinx_pcie_base_agent extends uvm_agent;
     //=========================================================================
     virtual function void connect_phase(uvm_phase phase);
         super.connect_phase(phase);
+
+        // -----------------------------------------------------------------
+        // 步骤 0：为 axis_agent 的 reset_listener 设置 dummy 事件
+        // axis_agent 的 rst_listener 需要 reset_handler 的事件引用
+        // 我们不使用 axis_env，所以手动创建 dummy 事件防止 null 访问
+        // -----------------------------------------------------------------
+        begin
+            uvm_event dummy_assert_evt  = new("dummy_reset_assert");
+            uvm_event dummy_active_evt  = new("dummy_reset_active");
+            uvm_event dummy_deassert_evt = new("dummy_reset_deassert");
+            axis_agent agents[$] = '{rq_agent, rc_agent, cq_agent, cc_agent};
+            foreach (agents[i]) begin
+                if (agents[i].rst_listener != null) begin
+                    agents[i].rst_listener.reset_asserted_evt   = dummy_assert_evt;
+                    agents[i].rst_listener.reset_active_evt     = dummy_active_evt;
+                    agents[i].rst_listener.reset_deasserted_evt = dummy_deassert_evt;
+                end
+            end
+        end
 
         // -----------------------------------------------------------------
         // 步骤 1：若为 ACTIVE 模式，连接 driver

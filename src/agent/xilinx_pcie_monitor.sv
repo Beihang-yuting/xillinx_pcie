@@ -222,9 +222,15 @@ class xilinx_pcie_monitor extends uvm_component;
 
         // -----------------------------------------------------------------
         // 步骤 6：合并 tag[9:8] 到 tlp.tag（codec 仅设置了低 8 位）
+        //         同时从 tuser 提取 first_be/last_be 回写到 TLP（CQ/RQ 通道）
+        //         CQ/RQ 描述符中不含 byte enable，需从 tuser 补充
         // -----------------------------------------------------------------
         if (tlp != null) begin
             tlp.tag[9:8] = tag_9_8;
+
+            // 从 tuser 提取 first_be/last_be 并回写到解码后的 TLP
+            apply_tuser_be(tlp, first_tuser, channel);
+
             `uvm_info(get_type_name(),
                 $sformatf("解码 %s 通道 TLP: %s, tag=0x%03h, payload=%0d bytes",
                     channel.name(), tlp.kind.name(), tlp.tag, tlp.payload.size()),
@@ -328,5 +334,103 @@ class xilinx_pcie_monitor extends uvm_component;
 
         return tag_9_8;
     endfunction : extract_tag_9_8
+
+    //=========================================================================
+    // apply_tuser_be：从首 beat tuser 中提取 first_be/last_be 并回写到 TLP
+    // CQ/RQ 描述符不含 byte enable 字段，必须从 tuser 补充
+    // 否则 EP auto-response 的 mem_write 会因 first_be=0 跳过首尾 DW 写入
+    //=========================================================================
+    protected function void apply_tuser_be(
+        pcie_tl_tlp      tlp,
+        bit [127:0]      tuser,
+        xilinx_channel_e channel
+    );
+        pcie_tl_mem_tlp mem_tlp;
+        pcie_tl_io_tlp  io_tlp;
+
+        case (channel)
+            XILINX_CH_RQ: begin
+                // RQ tuser 包含 first_be/last_be，提取后回写到 mem_tlp
+                bit [3:0]   first_be;
+                bit [3:0]   last_be;
+                bit [2:0]   addr_offset;
+                bit         discontinue;
+                bit         tph_present;
+                bit [1:0]   tph_type;
+                bit [7:0]   tph_st_tag;
+                bit [5:0]   seq_num_0;
+                bit [5:0]   seq_num_1;
+                bit [1:0]   tag_9_8;
+
+                tuser_codec.decode_rq_tuser(
+                    .tuser       ({157'h0, tuser}),
+                    .first_be    (first_be),
+                    .last_be     (last_be),
+                    .addr_offset (addr_offset),
+                    .discontinue (discontinue),
+                    .tph_present (tph_present),
+                    .tph_type    (tph_type),
+                    .tph_st_tag  (tph_st_tag),
+                    .seq_num_0   (seq_num_0),
+                    .seq_num_1   (seq_num_1),
+                    .tag_9_8     (tag_9_8)
+                );
+
+                if ($cast(mem_tlp, tlp)) begin
+                    mem_tlp.first_be = first_be;
+                    mem_tlp.last_be  = last_be;
+                end else if ($cast(io_tlp, tlp)) begin
+                    io_tlp.first_be = first_be;
+                end
+            end
+
+            XILINX_CH_CQ: begin
+                // CQ tuser 包含 first_be/last_be，提取后回写到 mem_tlp
+                bit [3:0]   first_be;
+                bit [3:0]   last_be;
+                bit [63:0]  byte_en;
+                bit         sop;
+                bit         sop_1;
+                bit         discontinue;
+                bit         tph_present;
+                bit [1:0]   tph_type;
+                bit [7:0]   tph_st_tag;
+                bit         is_eop;
+                bit [2:0]   eop_offset;
+                bit         is_eop_1;
+                bit [2:0]   eop_offset_1;
+                bit [1:0]   tag_9_8;
+
+                tuser_codec.decode_cq_tuser(
+                    .tuser        ({247'h0, tuser}),
+                    .first_be     (first_be),
+                    .last_be      (last_be),
+                    .byte_en      (byte_en),
+                    .sop          (sop),
+                    .sop_1        (sop_1),
+                    .discontinue  (discontinue),
+                    .tph_present  (tph_present),
+                    .tph_type     (tph_type),
+                    .tph_st_tag   (tph_st_tag),
+                    .is_eop       (is_eop),
+                    .eop_offset   (eop_offset),
+                    .is_eop_1     (is_eop_1),
+                    .eop_offset_1 (eop_offset_1),
+                    .tag_9_8      (tag_9_8)
+                );
+
+                if ($cast(mem_tlp, tlp)) begin
+                    mem_tlp.first_be = first_be;
+                    mem_tlp.last_be  = last_be;
+                end else if ($cast(io_tlp, tlp)) begin
+                    io_tlp.first_be = first_be;
+                end
+            end
+
+            // RC/CC 通道为 completion，无 first_be/last_be，跳过
+            default: begin
+            end
+        endcase
+    endfunction : apply_tuser_be
 
 endclass : xilinx_pcie_monitor

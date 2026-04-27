@@ -36,6 +36,23 @@ class xilinx_pcie_rc_agent extends xilinx_pcie_base_agent;
     endfunction : new
 
     //=========================================================================
+    // build_phase：在调用 super 之前强制 role=RC
+    // 因为 test 层级 config_db 优先级高于 env，rc_agent 可能拿到 EP role
+    // 先获取 cfg 并修正 role，再调用 super 执行实际创建
+    //=========================================================================
+    virtual function void build_phase(uvm_phase phase);
+        // 先手动获取 cfg（不调用 super）
+        if (!uvm_config_db #(xilinx_pcie_env_config)::get(this, "", "cfg", cfg))
+            `uvm_fatal(get_type_name(), "未找到 cfg")
+        // 强制为 RC role
+        cfg.role = XILINX_PCIE_RC;
+        // 重新注册修正后的 cfg，确保 super.build_phase 和子组件拿到正确的 role
+        uvm_config_db #(xilinx_pcie_env_config)::set(this, "*", "cfg", cfg);
+        // 调用父类 build（会再次 get cfg，此时 role 已是 RC）
+        super.build_phase(phase);
+    endfunction : build_phase
+
+    //=========================================================================
     // connect_phase：调用父类连接后，订阅分析端口
     //=========================================================================
     virtual function void connect_phase(uvm_phase phase);
