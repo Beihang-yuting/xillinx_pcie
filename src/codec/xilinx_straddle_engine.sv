@@ -288,4 +288,33 @@ class xilinx_straddle_engine;
 
     endfunction : unpack_single_tlp
 
+    //=========================================================================
+    // calc_eop_offset: 计算最后一个 beat 中 TLP 结束的 DW 偏移
+    //=========================================================================
+    //
+    // 当 straddle_enable=1 时，tuser 中 eop_offset/eof_offset 字段指示
+    // TLP 在最后一个 beat 中结束于哪个 DW 位置。
+    //
+    // 返回值：最后一个 beat 中最高有效 DW 的索引（从 0 开始计数）。
+    // 例如：256-bit beat 有 8 个 DW (0~7)，若 TLP 数据填充到 DW5，则返回 5。
+    //
+    // 参数：
+    //   last_keep - 最后一个 beat 的 tkeep（per-DW 掩码）
+    //
+    function bit [2:0] calc_eop_offset(bit [15:0] last_keep);
+        int beat_dws;
+        int last_valid_dw;
+
+        beat_dws      = DATA_WIDTH / 32;
+        last_valid_dw = 0;
+
+        // 找到最后一个 tkeep=1 的 DW 位置
+        for (int i = 0; i < beat_dws; i++) begin
+            if (last_keep[i])
+                last_valid_dw = i;
+        end
+
+        return last_valid_dw[2:0];
+    endfunction : calc_eop_offset
+
 endclass : xilinx_straddle_engine

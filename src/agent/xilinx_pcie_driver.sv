@@ -281,7 +281,7 @@ class xilinx_pcie_driver extends uvm_driver #(pcie_tl_tlp);
             // -----------------------------------------------------------------
             // 步骤 7：编码 tuser（每个 beat 独立编码）
             // -----------------------------------------------------------------
-            tuser_val = encode_tuser_for_beat(tlp, channel, beats[i], i, num_beats, lasts[i]);
+            tuser_val = encode_tuser_for_beat(tlp, channel, beats[i], i, num_beats, lasts[i], keeps[i]);
 
             // 设置 axis_transfer 字段
             xfer.tdata = beats[i];
@@ -316,10 +316,19 @@ class xilinx_pcie_driver extends uvm_driver #(pcie_tl_tlp);
                     $sformatf("DEBUG: oneshot done, beat[%0d]", i), UVM_LOW)
             end
 
-            `uvm_info(get_type_name(),
-                $sformatf("发送 beat[%0d/%0d] 到 %s 通道, tlast=%0b",
-                    i, num_beats, channel.name(), lasts[i]),
-                UVM_FULL)
+            // Straddle 模式下输出 sop/eop 诊断信息
+            if (straddle_eng.straddle_enable) begin
+                `uvm_info(get_type_name(),
+                    $sformatf("Straddle beat[%0d/%0d] 到 %s 通道, tlast=%0b, sop=%0b, eop=%0b, keep=0x%04h",
+                        i, num_beats, channel.name(), lasts[i],
+                        (i == 0), lasts[i], keeps[i]),
+                    UVM_HIGH)
+            end else begin
+                `uvm_info(get_type_name(),
+                    $sformatf("发送 beat[%0d/%0d] 到 %s 通道, tlast=%0b",
+                        i, num_beats, channel.name(), lasts[i]),
+                    UVM_FULL)
+            end
         end
     endtask : send_beats
 
@@ -364,7 +373,8 @@ class xilinx_pcie_driver extends uvm_driver #(pcie_tl_tlp);
         bit [511:0]      tdata,
         int              beat_idx,
         int              num_beats,
-        bit              is_last
+        bit              is_last,
+        bit [15:0]       dw_keep = 16'hFFFF
     );
         bit [127:0] tuser_truncated;
 
@@ -407,17 +417,25 @@ class xilinx_pcie_driver extends uvm_driver #(pcie_tl_tlp);
                 for (int b = 0; b < byte_lanes; b++)
                     byte_en[b] = 1'b1;
 
-                tuser_full = tuser_codec.encode_rc_tuser(
-                    .byte_en      (byte_en),
-                    .is_sof_0     (beat_idx == 0),
-                    .is_sof_1     (1'b0),
-                    .is_eof_0     (is_last),
-                    .eof_offset_0 (3'h0),
-                    .is_eof_1     (1'b0),
-                    .eof_offset_1 (3'h0),
-                    .discontinue  (1'b0),
-                    .tdata        (tdata)
-                );
+                // straddle_enable=1 时计算正确的 eof_offset_0
+                // eof_offset_0 指示 TLP 在最后一个 beat 中结束于哪个 DW
+                begin
+                    bit [2:0] eof_off;
+                    eof_off = (is_last && straddle_eng.straddle_enable) ?
+                              straddle_eng.calc_eop_offset(dw_keep) : 3'h0;
+
+                    tuser_full = tuser_codec.encode_rc_tuser(
+                        .byte_en      (byte_en),
+                        .is_sof_0     (beat_idx == 0),
+                        .is_sof_1     (1'b0),
+                        .is_eof_0     (is_last),
+                        .eof_offset_0 (eof_off),
+                        .is_eof_1     (1'b0),
+                        .eof_offset_1 (3'h0),
+                        .discontinue  (1'b0),
+                        .tdata        (tdata)
+                    );
+                end
                 tuser_truncated = tuser_full[127:0];
             end
 
@@ -437,23 +455,31 @@ class xilinx_pcie_driver extends uvm_driver #(pcie_tl_tlp);
                 for (int b = 0; b < byte_lanes; b++)
                     byte_en[b] = 1'b1;
 
-                tuser_full = tuser_codec.encode_cq_tuser(
-                    .first_be     (beat_idx == 0 ? first_be : 4'h0),
-                    .last_be      (beat_idx == 0 ? last_be  : 4'h0),
-                    .byte_en      (byte_en),
-                    .sop          (beat_idx == 0),
-                    .sop_1        (1'b0),
-                    .discontinue  (1'b0),
-                    .tph_present  (1'b0),
-                    .tph_type     (2'h0),
-                    .tph_st_tag   (8'h0),
-                    .is_eop       (is_last),
-                    .eop_offset   (3'h0),
-                    .is_eop_1     (1'b0),
-                    .eop_offset_1 (3'h0),
-                    .tag_9_8      (beat_idx == 0 ? tag_9_8 : 2'h0),
-                    .tdata        (tdata)
-                );
+                // straddle_enable=1 时计算正确的 eop_offset
+                // eop_offset 指示 TLP 在最后一个 beat 中结束于哪个 DW
+                begin
+                    bit [2:0] eop_off;
+                    eop_off = (is_last && straddle_eng.straddle_enable) ?
+                              straddle_eng.calc_eop_offset(dw_keep) : 3'h0;
+
+                    tuser_full = tuser_codec.encode_cq_tuser(
+                        .first_be     (beat_idx == 0 ? first_be : 4'h0),
+                        .last_be      (beat_idx == 0 ? last_be  : 4'h0),
+                        .byte_en      (byte_en),
+                        .sop          (beat_idx == 0),
+                        .sop_1        (1'b0),
+                        .discontinue  (1'b0),
+                        .tph_present  (1'b0),
+                        .tph_type     (2'h0),
+                        .tph_st_tag   (8'h0),
+                        .is_eop       (is_last),
+                        .eop_offset   (eop_off),
+                        .is_eop_1     (1'b0),
+                        .eop_offset_1 (3'h0),
+                        .tag_9_8      (beat_idx == 0 ? tag_9_8 : 2'h0),
+                        .tdata        (tdata)
+                    );
+                end
                 tuser_truncated = tuser_full[127:0];
             end
 
