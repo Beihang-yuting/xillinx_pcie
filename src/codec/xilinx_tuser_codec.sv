@@ -12,6 +12,10 @@
 // 本类通过构造函数接收 DATA_WIDTH，实例方法根据宽度自动选择正确布局。
 //
 // 注意：本类为普通 class，不继承 UVM 基类，需要实例化后使用。
+//
+// 修复说明：所有 part select 均使用硬编码常量索引，避免 VCS
+// Error-[IRIPS] Illegal range in part select 错误。
+// 不再使用 tuser[var1:var2] 形式，改为按 DATA_WIDTH 分支使用常量。
 //=============================================================================
 
 class xilinx_tuser_codec;
@@ -107,105 +111,62 @@ class xilinx_tuser_codec;
         bit [511:0] tdata
     );
         bit [284:0] tuser;           // 最大宽度返回值，未使用位填零
-        int         parity_bits;     // 本实例需要的 parity 位数 = DATA_WIDTH/8
         bit [63:0]  parity;          // 计算得到的 parity 向量
 
-        tuser       = '0;
-        parity_bits = DATA_WIDTH / 8;   // 256-bit -> 32，512-bit -> 64
-        parity      = calc_parity(tdata);
+        tuser  = '0;
+        parity = calc_parity(tdata);
 
         // ---------------------------------------------------------------
-        // 共同字段：所有数据宽度均相同的基础字段
+        // 共同字段：所有数据宽度均相同的基础字段（[22:0]）
         // 参考 PG213 Table 2-8 (RQ tuser)
         // ---------------------------------------------------------------
+        tuser[3:0]   = first_be;     // [3:0]   首 DW 字节使能
+        tuser[7:4]   = last_be;      // [7:4]   末 DW 字节使能
+        tuser[10:8]  = addr_offset;  // [10:8]  地址字节偏移
+        tuser[11]    = discontinue;  // [11]    传输不连续标志
+        tuser[12]    = tph_present;  // [12]    TPH 存在标志
+        tuser[14:13] = tph_type;     // [14:13] TPH 类型
+        tuser[22:15] = tph_st_tag;   // [22:15] TPH Steering Tag
 
-        // [3:0]   first_be：首 DW 字节使能
-        tuser[3:0]   = first_be;
-
-        // [7:4]   last_be：末 DW 字节使能
-        tuser[7:4]   = last_be;
-
-        // [10:8]  addr_offset：地址字节偏移（仅低 3 位）
-        tuser[10:8]  = addr_offset;
-
-        // [11]    discontinue：传输不连续标志
-        tuser[11]    = discontinue;
-
-        // [12]    tph_present：TPH 存在标志
-        tuser[12]    = tph_present;
-
-        // [14:13] tph_type：TPH 类型
-        tuser[14:13] = tph_type;
-
-        // [22:15] tph_st_tag：TPH Steering Tag（8 位）
-        tuser[22:15] = tph_st_tag;
-
-        if (DATA_WIDTH == 64 || DATA_WIDTH == 128) begin
+        if (DATA_WIDTH <= 128) begin
             // ---------------------------------------------------------------
             // 64/128-bit 模式：62-bit tuser
             // 无 seq_num 高位扩展和 tag_9_8
+            // parity: 64-bit -> 8 bits, 128-bit -> 16 bits
+            // 两者均放在 [62:31]，高位为零（tuser 已初始化为 0）
             // ---------------------------------------------------------------
-            // [26:23] seq_num_0[3:0]：序列号 0 低 4 位
-            tuser[26:23] = seq_num_0[3:0];
-
-            // [30:27] seq_num_1[3:0]：序列号 1 低 4 位
-            tuser[30:27] = seq_num_1[3:0];
-
-            // [62:31] parity：DATA_WIDTH/8 个字节校验位（填入低位，高位补零）
-            tuser[62:31] = parity[parity_bits-1:0];
+            tuser[26:23] = seq_num_0[3:0]; // [26:23] seq_num_0 低 4 位
+            tuser[30:27] = seq_num_1[3:0]; // [30:27] seq_num_1 低 4 位
+            // parity 最多 16 位放入 [46:31]，[62:47] 保持为零
+            if (DATA_WIDTH == 64) begin
+                tuser[38:31] = parity[7:0];    // 8 字节 parity
+            end else begin
+                tuser[46:31] = parity[15:0];   // 16 字节 parity
+            end
 
         end else if (DATA_WIDTH == 256) begin
             // ---------------------------------------------------------------
             // 256-bit 模式：137-bit tuser
-            // parity 字段为 32 bits（256/8=32 字节）
-            // 参考 PG213 Table 2-8（256-bit variant）
+            // parity 32 bits（256/8=32 字节）
             // ---------------------------------------------------------------
-            // [26:23] seq_num_0[3:0]：序列号 0 低 4 位
-            tuser[26:23] = seq_num_0[3:0];
-
-            // [30:27] seq_num_1[3:0]：序列号 1 低 4 位
-            tuser[30:27] = seq_num_1[3:0];
-
-            // [62:31] parity[31:0]：32 字节奇偶校验（共 32 bits）
-            tuser[62:31] = parity[31:0];
-
-            // [68:63] seq_num_0[5:0]：序列号 0 全 6 位（高位扩展段）
-            // 注意：PG213 在 256-bit 模式下将 seq_num_0 完整 6 位置于此段
-            tuser[68:63] = seq_num_0[5:0];
-
-            // [74:69] seq_num_1[5:0]：序列号 1 全 6 位
-            tuser[74:69] = seq_num_1[5:0];
-
-            // [76:75] tag_9_8：Tag 高 2 位（10-bit Tag 扩展）
-            tuser[76:75] = tag_9_8;
-
-            // [136:77] 保留（Reserved），保持 0（共 60 位）
+            tuser[26:23] = seq_num_0[3:0]; // [26:23] seq_num_0 低 4 位
+            tuser[30:27] = seq_num_1[3:0]; // [30:27] seq_num_1 低 4 位
+            tuser[62:31] = parity[31:0];   // [62:31] parity 32 bits
+            tuser[68:63] = seq_num_0[5:0]; // [68:63] seq_num_0 全 6 位
+            tuser[74:69] = seq_num_1[5:0]; // [74:69] seq_num_1 全 6 位
+            tuser[76:75] = tag_9_8;        // [76:75] tag_9_8
 
         end else begin
             // ---------------------------------------------------------------
             // 512-bit 模式：285-bit tuser
-            // parity 字段扩展为 64 bits（512/8=64 字节）
-            // 参考 PG213 Table 2-8（512-bit variant）
+            // parity 64 bits（512/8=64 字节）
             // ---------------------------------------------------------------
-            // [26:23] seq_num_0[3:0]：序列号 0 低 4 位
-            tuser[26:23] = seq_num_0[3:0];
-
-            // [30:27] seq_num_1[3:0]：序列号 1 低 4 位
-            tuser[30:27] = seq_num_1[3:0];
-
-            // [94:31] parity[63:0]：64 字节奇偶校验（共 64 bits）
-            tuser[94:31] = parity[63:0];
-
-            // [100:95] seq_num_0[5:0]：序列号 0 全 6 位（高位扩展段）
-            tuser[100:95] = seq_num_0[5:0];
-
-            // [106:101] seq_num_1[5:0]：序列号 1 全 6 位
-            tuser[106:101] = seq_num_1[5:0];
-
-            // [108:107] tag_9_8：Tag 高 2 位
-            tuser[108:107] = tag_9_8;
-
-            // [284:109] 保留（Reserved），保持 0
+            tuser[26:23]   = seq_num_0[3:0]; // [26:23] seq_num_0 低 4 位
+            tuser[30:27]   = seq_num_1[3:0]; // [30:27] seq_num_1 低 4 位
+            tuser[94:31]   = parity[63:0];   // [94:31] parity 64 bits
+            tuser[100:95]  = seq_num_0[5:0]; // [100:95] seq_num_0 全 6 位
+            tuser[106:101] = seq_num_1[5:0]; // [106:101] seq_num_1 全 6 位
+            tuser[108:107] = tag_9_8;        // [108:107] tag_9_8
 
         end
 
@@ -232,70 +193,35 @@ class xilinx_tuser_codec;
         // ---------------------------------------------------------------
         // 共同字段提取（所有数据宽度均使用相同位置）
         // ---------------------------------------------------------------
+        first_be    = tuser[3:0];    // [3:0]   首 DW 字节使能
+        last_be     = tuser[7:4];    // [7:4]   末 DW 字节使能
+        addr_offset = tuser[10:8];   // [10:8]  地址字节偏移
+        discontinue = tuser[11];     // [11]    传输不连续标志
+        tph_present = tuser[12];     // [12]    TPH 存在标志
+        tph_type    = tuser[14:13];  // [14:13] TPH 类型
+        tph_st_tag  = tuser[22:15];  // [22:15] TPH Steering Tag
 
-        // [3:0]   first_be：首 DW 字节使能
-        first_be    = tuser[3:0];
-
-        // [7:4]   last_be：末 DW 字节使能
-        last_be     = tuser[7:4];
-
-        // [10:8]  addr_offset：地址字节偏移
-        addr_offset = tuser[10:8];
-
-        // [11]    discontinue：传输不连续标志
-        discontinue = tuser[11];
-
-        // [12]    tph_present：TPH 存在标志
-        tph_present = tuser[12];
-
-        // [14:13] tph_type：TPH 类型
-        tph_type    = tuser[14:13];
-
-        // [22:15] tph_st_tag：TPH Steering Tag
-        tph_st_tag  = tuser[22:15];
-
-        // 初始化扩展字段为默认值（64/128-bit 模式无这些字段）
+        // 初始化扩展字段为默认值
         seq_num_0 = '0;
         seq_num_1 = '0;
         tag_9_8   = '0;
 
-        if (DATA_WIDTH == 64 || DATA_WIDTH == 128) begin
-            // ---------------------------------------------------------------
+        if (DATA_WIDTH <= 128) begin
             // 64/128-bit 模式：seq_num 仅有低 4 位，无高位扩展
-            // ---------------------------------------------------------------
-            // [26:23] seq_num_0[3:0]：序列号 0 低 4 位，高位补零
-            seq_num_0 = {2'b00, tuser[26:23]};
-
-            // [30:27] seq_num_1[3:0]：序列号 1 低 4 位，高位补零
-            seq_num_1 = {2'b00, tuser[30:27]};
-
-            // tag_9_8：62-bit tuser 不携带，保持 0
+            seq_num_0 = {2'b00, tuser[26:23]}; // [26:23] seq_num_0 低 4 位
+            seq_num_1 = {2'b00, tuser[30:27]}; // [30:27] seq_num_1 低 4 位
 
         end else if (DATA_WIDTH == 256) begin
-            // ---------------------------------------------------------------
             // 256-bit 模式：提取完整 seq_num 和 tag_9_8
-            // ---------------------------------------------------------------
-            // [68:63] seq_num_0[5:0]：高位扩展段存放完整 6 位序列号
-            seq_num_0 = tuser[68:63];
-
-            // [74:69] seq_num_1[5:0]：序列号 1 完整 6 位
-            seq_num_1 = tuser[74:69];
-
-            // [76:75] tag_9_8：Tag 高 2 位
-            tag_9_8   = tuser[76:75];
+            seq_num_0 = tuser[68:63]; // [68:63] seq_num_0 全 6 位
+            seq_num_1 = tuser[74:69]; // [74:69] seq_num_1 全 6 位
+            tag_9_8   = tuser[76:75]; // [76:75] tag_9_8
 
         end else begin
-            // ---------------------------------------------------------------
             // 512-bit 模式：提取扩展字段
-            // ---------------------------------------------------------------
-            // [100:95] seq_num_0[5:0]：序列号 0 完整 6 位
-            seq_num_0 = tuser[100:95];
-
-            // [106:101] seq_num_1[5:0]：序列号 1 完整 6 位
-            seq_num_1 = tuser[106:101];
-
-            // [108:107] tag_9_8：Tag 高 2 位
-            tag_9_8   = tuser[108:107];
+            seq_num_0 = tuser[100:95];  // [100:95] seq_num_0 全 6 位
+            seq_num_1 = tuser[106:101]; // [106:101] seq_num_1 全 6 位
+            tag_9_8   = tuser[108:107]; // [108:107] tag_9_8
 
         end
     endfunction : decode_rq_tuser
@@ -308,7 +234,7 @@ class xilinx_tuser_codec;
     //   DATA_WIDTH=256     -> 161-bit tuser（byte_en 32 bits，parity 32 bits）
     //   DATA_WIDTH=512     -> 321-bit tuser（byte_en 64 bits，parity 64 bits）
     //
-    // 256-bit 布局（参考值）：
+    // 布局结构（以 256-bit 为例）：
     //   [31:0]    byte_en（32 bits）
     //   [32]      is_sof_0
     //   [33]      is_sof_1
@@ -345,56 +271,72 @@ class xilinx_tuser_codec;
         bit [511:0] tdata
     );
         bit [320:0] tuser;           // 最大宽度返回值
-        int         be_bits;         // byte_en 有效位数 = DATA_WIDTH/8
-        int         parity_bits;     // parity 位数 = DATA_WIDTH/8
-        int         be_top;          // byte_en 字段最高位位置（包含）
-        int         ctrl_base;       // 控制字段（sof/eof 等）起始位置
         bit [63:0]  parity;          // 计算得到的 parity 向量
 
-        tuser       = '0;
-        be_bits     = DATA_WIDTH / 8;   // 64->8, 128->16, 256->32, 512->64
-        parity_bits = DATA_WIDTH / 8;
-        parity      = calc_parity(tdata);
+        tuser  = '0;
+        parity = calc_parity(tdata);
 
-        // ---------------------------------------------------------------
-        // byte_en 字段：从 bit 0 开始，宽度为 be_bits
-        // 256-bit 模式: [31:0]，512-bit 模式: [63:0]
-        // ---------------------------------------------------------------
-        be_top = be_bits - 1;   // byte_en 最高有效位索引
+        if (DATA_WIDTH == 64) begin
+            // ---------------------------------------------------------------
+            // 64-bit 模式：75-bit tuser
+            // byte_en = 8 bits [7:0]，ctrl 从 bit 8 开始，parity 8 bits
+            // ---------------------------------------------------------------
+            tuser[7:0]   = byte_en[7:0];     // [7:0]   byte_en (8 bits)
+            tuser[8]     = is_sof_0;         // [8]     is_sof_0
+            tuser[9]     = is_sof_1;         // [9]     is_sof_1
+            tuser[10]    = is_eof_0;         // [10]    is_eof_0
+            tuser[13:11] = eof_offset_0;     // [13:11] eof_offset_0
+            tuser[14]    = is_eof_1;         // [14]    is_eof_1
+            tuser[17:15] = eof_offset_1;     // [17:15] eof_offset_1
+            tuser[18]    = discontinue;      // [18]    discontinue
+            tuser[26:19] = parity[7:0];      // [26:19] parity (8 bits)
 
-        // 写入 byte_en（有效位宽取决于 DATA_WIDTH）
-        tuser[be_top:0] = byte_en[be_bits-1:0];
+        end else if (DATA_WIDTH == 128) begin
+            // ---------------------------------------------------------------
+            // 128-bit 模式：75-bit tuser
+            // byte_en = 16 bits [15:0]，ctrl 从 bit 16 开始，parity 16 bits
+            // ---------------------------------------------------------------
+            tuser[15:0]  = byte_en[15:0];    // [15:0]  byte_en (16 bits)
+            tuser[16]    = is_sof_0;         // [16]    is_sof_0
+            tuser[17]    = is_sof_1;         // [17]    is_sof_1
+            tuser[18]    = is_eof_0;         // [18]    is_eof_0
+            tuser[21:19] = eof_offset_0;     // [21:19] eof_offset_0
+            tuser[22]    = is_eof_1;         // [22]    is_eof_1
+            tuser[25:23] = eof_offset_1;     // [25:23] eof_offset_1
+            tuser[26]    = discontinue;      // [26]    discontinue
+            tuser[42:27] = parity[15:0];     // [42:27] parity (16 bits)
 
-        // ---------------------------------------------------------------
-        // 控制字段：紧接 byte_en 之后，偏移量由 be_bits 决定
-        // ctrl_base = be_bits（即 byte_en 占用的 bit 数）
-        // ---------------------------------------------------------------
-        ctrl_base = be_bits;
+        end else if (DATA_WIDTH == 256) begin
+            // ---------------------------------------------------------------
+            // 256-bit 模式：161-bit tuser
+            // byte_en = 32 bits [31:0]，ctrl 从 bit 32 开始，parity 32 bits
+            // ---------------------------------------------------------------
+            tuser[31:0]  = byte_en[31:0];    // [31:0]  byte_en (32 bits)
+            tuser[32]    = is_sof_0;         // [32]    is_sof_0
+            tuser[33]    = is_sof_1;         // [33]    is_sof_1
+            tuser[34]    = is_eof_0;         // [34]    is_eof_0
+            tuser[37:35] = eof_offset_0;     // [37:35] eof_offset_0
+            tuser[38]    = is_eof_1;         // [38]    is_eof_1
+            tuser[41:39] = eof_offset_1;     // [41:39] eof_offset_1
+            tuser[42]    = discontinue;      // [42]    discontinue
+            tuser[74:43] = parity[31:0];     // [74:43] parity (32 bits)
 
-        // [ctrl_base+0]         is_sof_0：SOF 0 标志
-        tuser[ctrl_base]     = is_sof_0;
+        end else begin
+            // ---------------------------------------------------------------
+            // 512-bit 模式：321-bit tuser
+            // byte_en = 64 bits [63:0]，ctrl 从 bit 64 开始，parity 64 bits
+            // ---------------------------------------------------------------
+            tuser[63:0]    = byte_en[63:0];  // [63:0]   byte_en (64 bits)
+            tuser[64]      = is_sof_0;       // [64]     is_sof_0
+            tuser[65]      = is_sof_1;       // [65]     is_sof_1
+            tuser[66]      = is_eof_0;       // [66]     is_eof_0
+            tuser[69:67]   = eof_offset_0;   // [69:67]  eof_offset_0
+            tuser[70]      = is_eof_1;       // [70]     is_eof_1
+            tuser[73:71]   = eof_offset_1;   // [73:71]  eof_offset_1
+            tuser[74]      = discontinue;    // [74]     discontinue
+            tuser[138:75]  = parity[63:0];   // [138:75] parity (64 bits)
 
-        // [ctrl_base+1]         is_sof_1：SOF 1 标志
-        tuser[ctrl_base+1]   = is_sof_1;
-
-        // [ctrl_base+2]         is_eof_0：EOF 0 标志
-        tuser[ctrl_base+2]   = is_eof_0;
-
-        // [ctrl_base+5:ctrl_base+3] eof_offset_0[2:0]：EOF 0 偏移
-        tuser[ctrl_base+5:ctrl_base+3] = eof_offset_0;
-
-        // [ctrl_base+6]         is_eof_1：EOF 1 标志
-        tuser[ctrl_base+6]   = is_eof_1;
-
-        // [ctrl_base+9:ctrl_base+7] eof_offset_1[2:0]：EOF 1 偏移
-        tuser[ctrl_base+9:ctrl_base+7] = eof_offset_1;
-
-        // [ctrl_base+10]        discontinue：不连续标志
-        tuser[ctrl_base+10]  = discontinue;
-
-        // parity 字段紧接 discontinue 之后
-        // 起始位 ctrl_base+11，宽度为 parity_bits
-        tuser[ctrl_base+10+parity_bits : ctrl_base+11] = parity[parity_bits-1:0];
+        end
 
         return tuser;
     endfunction : encode_rc_tuser
@@ -411,14 +353,6 @@ class xilinx_tuser_codec;
         output bit [2:0]   eof_offset_1,
         output bit         discontinue
     );
-        int be_bits;      // byte_en 有效位数
-        int be_top;       // byte_en 最高位
-        int ctrl_base;    // 控制字段起始位
-
-        be_bits   = DATA_WIDTH / 8;
-        be_top    = be_bits - 1;
-        ctrl_base = be_bits;
-
         // 初始化输出为全零
         byte_en      = '0;
         is_sof_0     = '0;
@@ -429,31 +363,51 @@ class xilinx_tuser_codec;
         eof_offset_1 = '0;
         discontinue  = '0;
 
-        // [be_top:0] byte_en：字节使能（低位）
-        byte_en[be_bits-1:0] = tuser[be_top:0];
+        if (DATA_WIDTH == 64) begin
+            // 64-bit 模式：byte_en 8 bits，ctrl 从 bit 8 开始
+            byte_en[7:0] = tuser[7:0];      // [7:0]   byte_en
+            is_sof_0     = tuser[8];         // [8]     is_sof_0
+            is_sof_1     = tuser[9];         // [9]     is_sof_1
+            is_eof_0     = tuser[10];        // [10]    is_eof_0
+            eof_offset_0 = tuser[13:11];     // [13:11] eof_offset_0
+            is_eof_1     = tuser[14];        // [14]    is_eof_1
+            eof_offset_1 = tuser[17:15];     // [17:15] eof_offset_1
+            discontinue  = tuser[18];        // [18]    discontinue
 
-        // 控制字段提取（相对于 ctrl_base 的偏移与 encode 一致）
+        end else if (DATA_WIDTH == 128) begin
+            // 128-bit 模式：byte_en 16 bits，ctrl 从 bit 16 开始
+            byte_en[15:0] = tuser[15:0];     // [15:0]  byte_en
+            is_sof_0      = tuser[16];       // [16]    is_sof_0
+            is_sof_1      = tuser[17];       // [17]    is_sof_1
+            is_eof_0      = tuser[18];       // [18]    is_eof_0
+            eof_offset_0  = tuser[21:19];    // [21:19] eof_offset_0
+            is_eof_1      = tuser[22];       // [22]    is_eof_1
+            eof_offset_1  = tuser[25:23];    // [25:23] eof_offset_1
+            discontinue   = tuser[26];       // [26]    discontinue
 
-        // [ctrl_base+0]         is_sof_0
-        is_sof_0     = tuser[ctrl_base];
+        end else if (DATA_WIDTH == 256) begin
+            // 256-bit 模式：byte_en 32 bits，ctrl 从 bit 32 开始
+            byte_en[31:0] = tuser[31:0];     // [31:0]  byte_en
+            is_sof_0      = tuser[32];       // [32]    is_sof_0
+            is_sof_1      = tuser[33];       // [33]    is_sof_1
+            is_eof_0      = tuser[34];       // [34]    is_eof_0
+            eof_offset_0  = tuser[37:35];    // [37:35] eof_offset_0
+            is_eof_1      = tuser[38];       // [38]    is_eof_1
+            eof_offset_1  = tuser[41:39];    // [41:39] eof_offset_1
+            discontinue   = tuser[42];       // [42]    discontinue
 
-        // [ctrl_base+1]         is_sof_1
-        is_sof_1     = tuser[ctrl_base+1];
+        end else begin
+            // 512-bit 模式：byte_en 64 bits，ctrl 从 bit 64 开始
+            byte_en[63:0] = tuser[63:0];     // [63:0]  byte_en
+            is_sof_0      = tuser[64];       // [64]    is_sof_0
+            is_sof_1      = tuser[65];       // [65]    is_sof_1
+            is_eof_0      = tuser[66];       // [66]    is_eof_0
+            eof_offset_0  = tuser[69:67];    // [69:67] eof_offset_0
+            is_eof_1      = tuser[70];       // [70]    is_eof_1
+            eof_offset_1  = tuser[73:71];    // [73:71] eof_offset_1
+            discontinue   = tuser[74];       // [74]    discontinue
 
-        // [ctrl_base+2]         is_eof_0
-        is_eof_0     = tuser[ctrl_base+2];
-
-        // [ctrl_base+5:ctrl_base+3] eof_offset_0
-        eof_offset_0 = tuser[ctrl_base+5:ctrl_base+3];
-
-        // [ctrl_base+6]         is_eof_1
-        is_eof_1     = tuser[ctrl_base+6];
-
-        // [ctrl_base+9:ctrl_base+7] eof_offset_1
-        eof_offset_1 = tuser[ctrl_base+9:ctrl_base+7];
-
-        // [ctrl_base+10]        discontinue
-        discontinue  = tuser[ctrl_base+10];
+        end
 
     endfunction : decode_rc_tuser
 
@@ -465,7 +419,7 @@ class xilinx_tuser_codec;
     //   DATA_WIDTH=256     -> 183-bit tuser（byte_en 32 bits，parity 32 bits）
     //   DATA_WIDTH=512     -> 375-bit tuser（byte_en 64 bits，parity 64 bits）
     //
-    // 256-bit 布局（参考值）：
+    // 布局结构（以 256-bit 为例）：
     //   [3:0]     first_be
     //   [7:4]     last_be
     //   [39:8]    byte_en（32 bits）
@@ -521,91 +475,100 @@ class xilinx_tuser_codec;
         bit [511:0] tdata
     );
         bit [374:0] tuser;           // 最大宽度返回值
-        int         be_bits;         // byte_en 有效位数 = DATA_WIDTH/8
-        int         parity_bits;     // parity 位数 = DATA_WIDTH/8
-        int         be_off;          // byte_en 字段在 tuser 中的起始偏移（固定为 8）
-        int         be_top;          // byte_en 字段最高位（包含）
-        int         ctrl_base;       // 控制字段（sop/discontinue 等）起始位
-        int         parity_base;     // parity 字段起始位
-        int         eop_base;        // EOP 字段起始位
         bit [63:0]  parity;          // 计算得到的 parity 向量
 
-        tuser       = '0;
-        be_bits     = DATA_WIDTH / 8;
-        parity_bits = DATA_WIDTH / 8;
-        parity      = calc_parity(tdata);
+        tuser  = '0;
+        parity = calc_parity(tdata);
 
-        // ---------------------------------------------------------------
-        // 固定头部字段（所有数据宽度位置不变）
-        // 参考 PG213 Table 2-9 (CQ tuser)
-        // ---------------------------------------------------------------
+        // [3:0] first_be 和 [7:4] last_be 所有模式相同
+        tuser[3:0] = first_be;
+        tuser[7:4] = last_be;
 
-        // [3:0]   first_be：首 DW 字节使能
-        tuser[3:0]   = first_be;
+        if (DATA_WIDTH == 64) begin
+            // ---------------------------------------------------------------
+            // 64-bit 模式：88-bit tuser
+            // byte_en 8 bits [15:8]，ctrl 从 bit 16，parity 8 bits
+            // be_off=8, be_top=15, ctrl_base=16, parity_base=31, eop_base=39
+            // ---------------------------------------------------------------
+            tuser[15:8]  = byte_en[7:0];     // [15:8]  byte_en (8 bits)
+            tuser[16]    = sop;              // [16]    sop
+            tuser[17]    = sop_1;            // [17]    sop_1
+            tuser[18]    = discontinue;      // [18]    discontinue
+            tuser[19]    = tph_present;      // [19]    tph_present
+            tuser[21:20] = tph_type;         // [21:20] tph_type
+            tuser[29:22] = tph_st_tag;       // [29:22] tph_st_tag
+            tuser[30]    = 1'b1;             // [30]    parity_en
+            tuser[38:31] = parity[7:0];      // [38:31] parity (8 bits)
+            tuser[39]    = is_eop;           // [39]    is_eop
+            tuser[42:40] = eop_offset;       // [42:40] eop_offset
+            tuser[43]    = is_eop_1;         // [43]    is_eop_1
+            tuser[46:44] = eop_offset_1;     // [46:44] eop_offset_1
+            tuser[48:47] = tag_9_8;          // [48:47] tag_9_8
 
-        // [7:4]   last_be：末 DW 字节使能
-        tuser[7:4]   = last_be;
+        end else if (DATA_WIDTH == 128) begin
+            // ---------------------------------------------------------------
+            // 128-bit 模式：88-bit tuser
+            // byte_en 16 bits [23:8]，ctrl 从 bit 24，parity 16 bits
+            // be_off=8, be_top=23, ctrl_base=24, parity_base=39, eop_base=55
+            // ---------------------------------------------------------------
+            tuser[23:8]  = byte_en[15:0];    // [23:8]  byte_en (16 bits)
+            tuser[24]    = sop;              // [24]    sop
+            tuser[25]    = sop_1;            // [25]    sop_1
+            tuser[26]    = discontinue;      // [26]    discontinue
+            tuser[27]    = tph_present;      // [27]    tph_present
+            tuser[29:28] = tph_type;         // [29:28] tph_type
+            tuser[37:30] = tph_st_tag;       // [37:30] tph_st_tag
+            tuser[38]    = 1'b1;             // [38]    parity_en
+            tuser[54:39] = parity[15:0];     // [54:39] parity (16 bits)
+            tuser[55]    = is_eop;           // [55]    is_eop
+            tuser[58:56] = eop_offset;       // [58:56] eop_offset
+            tuser[59]    = is_eop_1;         // [59]    is_eop_1
+            tuser[62:60] = eop_offset_1;     // [62:60] eop_offset_1
+            tuser[64:63] = tag_9_8;          // [64:63] tag_9_8
 
-        // ---------------------------------------------------------------
-        // byte_en 字段：从 bit 8 开始，宽度为 be_bits（DATA_WIDTH/8）
-        // 256-bit: [39:8]（32 bits），512-bit: [71:8]（64 bits）
-        // ---------------------------------------------------------------
-        be_off = 8;                    // byte_en 固定从 bit 8 开始
-        be_top = be_off + be_bits - 1; // byte_en 字段最高位
+        end else if (DATA_WIDTH == 256) begin
+            // ---------------------------------------------------------------
+            // 256-bit 模式：183-bit tuser
+            // byte_en 32 bits [39:8]，ctrl 从 bit 40，parity 32 bits
+            // be_off=8, be_top=39, ctrl_base=40, parity_base=55, eop_base=87
+            // ---------------------------------------------------------------
+            tuser[39:8]  = byte_en[31:0];    // [39:8]  byte_en (32 bits)
+            tuser[40]    = sop;              // [40]    sop
+            tuser[41]    = sop_1;            // [41]    sop_1
+            tuser[42]    = discontinue;      // [42]    discontinue
+            tuser[43]    = tph_present;      // [43]    tph_present
+            tuser[45:44] = tph_type;         // [45:44] tph_type
+            tuser[53:46] = tph_st_tag;       // [53:46] tph_st_tag
+            tuser[54]    = 1'b1;             // [54]    parity_en
+            tuser[86:55] = parity[31:0];     // [86:55] parity (32 bits)
+            tuser[87]    = is_eop;           // [87]    is_eop
+            tuser[90:88] = eop_offset;       // [90:88] eop_offset
+            tuser[91]    = is_eop_1;         // [91]    is_eop_1
+            tuser[94:92] = eop_offset_1;     // [94:92] eop_offset_1
+            tuser[96:95] = tag_9_8;          // [96:95] tag_9_8
 
-        tuser[be_top:be_off] = byte_en[be_bits-1:0];
+        end else begin
+            // ---------------------------------------------------------------
+            // 512-bit 模式：375-bit tuser
+            // byte_en 64 bits [71:8]，ctrl 从 bit 72，parity 64 bits
+            // be_off=8, be_top=71, ctrl_base=72, parity_base=87, eop_base=151
+            // ---------------------------------------------------------------
+            tuser[71:8]    = byte_en[63:0];  // [71:8]   byte_en (64 bits)
+            tuser[72]      = sop;            // [72]     sop
+            tuser[73]      = sop_1;          // [73]     sop_1
+            tuser[74]      = discontinue;    // [74]     discontinue
+            tuser[75]      = tph_present;    // [75]     tph_present
+            tuser[77:76]   = tph_type;       // [77:76]  tph_type
+            tuser[85:78]   = tph_st_tag;     // [85:78]  tph_st_tag
+            tuser[86]      = 1'b1;           // [86]     parity_en
+            tuser[150:87]  = parity[63:0];   // [150:87] parity (64 bits)
+            tuser[151]     = is_eop;         // [151]    is_eop
+            tuser[154:152] = eop_offset;     // [154:152] eop_offset
+            tuser[155]     = is_eop_1;       // [155]    is_eop_1
+            tuser[158:156] = eop_offset_1;   // [158:156] eop_offset_1
+            tuser[160:159] = tag_9_8;        // [160:159] tag_9_8
 
-        // ---------------------------------------------------------------
-        // 控制字段：紧接 byte_en 之后（be_top+1 开始）
-        // ---------------------------------------------------------------
-        ctrl_base = be_top + 1;   // 控制字段起始位
-
-        // [ctrl_base+0]            sop：Start-of-Packet 标志
-        tuser[ctrl_base]     = sop;
-
-        // [ctrl_base+1]            sop_1：SOP 1 标志
-        tuser[ctrl_base+1]   = sop_1;
-
-        // [ctrl_base+2]            discontinue：不连续标志
-        tuser[ctrl_base+2]   = discontinue;
-
-        // [ctrl_base+3]            tph_present：TPH 存在标志
-        tuser[ctrl_base+3]   = tph_present;
-
-        // [ctrl_base+5:ctrl_base+4] tph_type：TPH 类型（2 位）
-        tuser[ctrl_base+5:ctrl_base+4] = tph_type;
-
-        // [ctrl_base+13:ctrl_base+6] tph_st_tag：TPH Steering Tag（8 位）
-        tuser[ctrl_base+13:ctrl_base+6] = tph_st_tag;
-
-        // [ctrl_base+14]           parity_en：奇偶校验使能（固定置 1）
-        tuser[ctrl_base+14]  = 1'b1;
-
-        // parity 字段：从 ctrl_base+15 开始，宽度为 parity_bits
-        // 256-bit: 32 bits at [ctrl_base+46:ctrl_base+15]
-        // 512-bit: 64 bits at [ctrl_base+78:ctrl_base+15]
-        parity_base = ctrl_base + 15;
-        tuser[parity_base + parity_bits - 1 : parity_base] = parity[parity_bits-1:0];
-
-        // ---------------------------------------------------------------
-        // EOP 字段：紧接 parity 之后
-        // ---------------------------------------------------------------
-        eop_base = parity_base + parity_bits;   // EOP 字段起始位
-
-        // [eop_base+0]            is_eop：EOP 标志
-        tuser[eop_base]     = is_eop;
-
-        // [eop_base+3:eop_base+1] eop_offset[2:0]：EOP 字节偏移
-        tuser[eop_base+3:eop_base+1] = eop_offset;
-
-        // [eop_base+4]            is_eop_1：EOP 1 标志
-        tuser[eop_base+4]   = is_eop_1;
-
-        // [eop_base+7:eop_base+5] eop_offset_1[2:0]：EOP 1 字节偏移
-        tuser[eop_base+7:eop_base+5] = eop_offset_1;
-
-        // [eop_base+9:eop_base+8] tag_9_8：Tag 高 2 位
-        tuser[eop_base+9:eop_base+8] = tag_9_8;
+        end
 
         return tuser;
     endfunction : encode_cq_tuser
@@ -628,22 +591,6 @@ class xilinx_tuser_codec;
         output bit [2:0]   eop_offset_1,
         output bit [1:0]   tag_9_8
     );
-        int be_bits;      // byte_en 有效位数
-        int be_off;       // byte_en 字段起始位（固定为 8）
-        int be_top;       // byte_en 字段最高位
-        int parity_bits;  // parity 位数
-        int ctrl_base;    // 控制字段起始位
-        int parity_base;  // parity 字段起始位
-        int eop_base;     // EOP 字段起始位
-
-        be_bits     = DATA_WIDTH / 8;
-        be_off      = 8;
-        be_top      = be_off + be_bits - 1;
-        parity_bits = DATA_WIDTH / 8;
-        ctrl_base   = be_top + 1;
-        parity_base = ctrl_base + 15;
-        eop_base    = parity_base + parity_bits;
-
         // 初始化输出
         first_be     = '0;
         last_be      = '0;
@@ -660,30 +607,75 @@ class xilinx_tuser_codec;
         eop_offset_1 = '0;
         tag_9_8      = '0;
 
-        // [3:0]   first_be
+        // [3:0] first_be 和 [7:4] last_be 所有模式相同
         first_be = tuser[3:0];
-
-        // [7:4]   last_be
         last_be  = tuser[7:4];
 
-        // byte_en：[be_top:be_off]
-        byte_en[be_bits-1:0] = tuser[be_top:be_off];
+        if (DATA_WIDTH == 64) begin
+            // 64-bit 模式
+            byte_en[7:0] = tuser[15:8];      // [15:8]  byte_en
+            sop          = tuser[16];         // [16]    sop
+            sop_1        = tuser[17];         // [17]    sop_1
+            discontinue  = tuser[18];         // [18]    discontinue
+            tph_present  = tuser[19];         // [19]    tph_present
+            tph_type     = tuser[21:20];      // [21:20] tph_type
+            tph_st_tag   = tuser[29:22];      // [29:22] tph_st_tag
+            // [30] parity_en（只读/忽略）
+            is_eop       = tuser[39];         // [39]    is_eop
+            eop_offset   = tuser[42:40];      // [42:40] eop_offset
+            is_eop_1     = tuser[43];         // [43]    is_eop_1
+            eop_offset_1 = tuser[46:44];      // [46:44] eop_offset_1
+            tag_9_8      = tuser[48:47];      // [48:47] tag_9_8
 
-        // 控制字段
-        sop         = tuser[ctrl_base];
-        sop_1       = tuser[ctrl_base+1];
-        discontinue = tuser[ctrl_base+2];
-        tph_present = tuser[ctrl_base+3];
-        tph_type    = tuser[ctrl_base+5:ctrl_base+4];
-        tph_st_tag  = tuser[ctrl_base+13:ctrl_base+6];
-        // [ctrl_base+14] parity_en（只读/忽略）
+        end else if (DATA_WIDTH == 128) begin
+            // 128-bit 模式
+            byte_en[15:0] = tuser[23:8];      // [23:8]  byte_en
+            sop           = tuser[24];        // [24]    sop
+            sop_1         = tuser[25];        // [25]    sop_1
+            discontinue   = tuser[26];        // [26]    discontinue
+            tph_present   = tuser[27];        // [27]    tph_present
+            tph_type      = tuser[29:28];     // [29:28] tph_type
+            tph_st_tag    = tuser[37:30];     // [37:30] tph_st_tag
+            // [38] parity_en（只读/忽略）
+            is_eop        = tuser[55];        // [55]    is_eop
+            eop_offset    = tuser[58:56];     // [58:56] eop_offset
+            is_eop_1      = tuser[59];        // [59]    is_eop_1
+            eop_offset_1  = tuser[62:60];     // [62:60] eop_offset_1
+            tag_9_8       = tuser[64:63];     // [64:63] tag_9_8
 
-        // EOP 字段
-        is_eop       = tuser[eop_base];
-        eop_offset   = tuser[eop_base+3:eop_base+1];
-        is_eop_1     = tuser[eop_base+4];
-        eop_offset_1 = tuser[eop_base+7:eop_base+5];
-        tag_9_8      = tuser[eop_base+9:eop_base+8];
+        end else if (DATA_WIDTH == 256) begin
+            // 256-bit 模式
+            byte_en[31:0] = tuser[39:8];      // [39:8]  byte_en
+            sop           = tuser[40];        // [40]    sop
+            sop_1         = tuser[41];        // [41]    sop_1
+            discontinue   = tuser[42];        // [42]    discontinue
+            tph_present   = tuser[43];        // [43]    tph_present
+            tph_type      = tuser[45:44];     // [45:44] tph_type
+            tph_st_tag    = tuser[53:46];     // [53:46] tph_st_tag
+            // [54] parity_en（只读/忽略）
+            is_eop        = tuser[87];        // [87]    is_eop
+            eop_offset    = tuser[90:88];     // [90:88] eop_offset
+            is_eop_1      = tuser[91];        // [91]    is_eop_1
+            eop_offset_1  = tuser[94:92];     // [94:92] eop_offset_1
+            tag_9_8       = tuser[96:95];     // [96:95] tag_9_8
+
+        end else begin
+            // 512-bit 模式
+            byte_en[63:0] = tuser[71:8];      // [71:8]   byte_en
+            sop           = tuser[72];        // [72]     sop
+            sop_1         = tuser[73];        // [73]     sop_1
+            discontinue   = tuser[74];        // [74]     discontinue
+            tph_present   = tuser[75];        // [75]     tph_present
+            tph_type      = tuser[77:76];     // [77:76]  tph_type
+            tph_st_tag    = tuser[85:78];     // [85:78]  tph_st_tag
+            // [86] parity_en（只读/忽略）
+            is_eop        = tuser[151];       // [151]    is_eop
+            eop_offset    = tuser[154:152];   // [154:152] eop_offset
+            is_eop_1      = tuser[155];       // [155]    is_eop_1
+            eop_offset_1  = tuser[158:156];   // [158:156] eop_offset_1
+            tag_9_8       = tuser[160:159];   // [160:159] tag_9_8
+
+        end
 
     endfunction : decode_cq_tuser
 
@@ -691,13 +683,13 @@ class xilinx_tuser_codec;
     // -------------------------------------------------------------------------
     // CC 通道 tuser 编解码
     // 宽度映射（PG213 Table 2-11）：
-    //   DATA_WIDTH=64/128  -> 33-bit tuser（parity 8/16 bits，字段总宽 33）
+    //   DATA_WIDTH=64/128  -> 33-bit tuser（parity 8/16 bits）
     //   DATA_WIDTH=256     -> 81-bit tuser（parity 32 bits）
     //   DATA_WIDTH=512     -> 161-bit tuser（parity 64 bits）
     //
     // CC tuser 结构最简单，只含 discontinue 和 parity 两个有意义的字段：
-    //   [0]       discontinue
-    //   [parity_bits:1]  parity（DATA_WIDTH/8 bits）
+    //   [0]                discontinue
+    //   [parity_bits:1]    parity（DATA_WIDTH/8 bits）
     // -------------------------------------------------------------------------
 
     // encode_cc_tuser: 将 discontinue 和 parity 打包成 CC tuser 向量
@@ -711,20 +703,24 @@ class xilinx_tuser_codec;
         bit [511:0] tdata
     );
         bit [160:0] tuser;       // 最大宽度返回值
-        int         parity_bits; // parity 位数 = DATA_WIDTH/8
         bit [63:0]  parity;      // 计算得到的 parity 向量
 
-        tuser       = '0;
-        parity_bits = DATA_WIDTH / 8;
-        parity      = calc_parity(tdata);
+        tuser  = '0;
+        parity = calc_parity(tdata);
 
-        // [0]         discontinue：不连续标志
-        tuser[0]    = discontinue;
+        // [0] discontinue：不连续标志
+        tuser[0] = discontinue;
 
-        // parity 字段：从 bit 1 开始，宽度为 parity_bits
-        // 64/128-bit: parity_bits=8/16 bits，高位补零
-        // 256-bit: [32:1]（32 bits），512-bit: [64:1]（64 bits）
-        tuser[parity_bits:1] = parity[parity_bits-1:0];
+        // parity 字段：从 bit 1 开始，宽度取决于 DATA_WIDTH
+        if (DATA_WIDTH == 64) begin
+            tuser[8:1]  = parity[7:0];      // [8:1]   parity (8 bits)
+        end else if (DATA_WIDTH == 128) begin
+            tuser[16:1] = parity[15:0];     // [16:1]  parity (16 bits)
+        end else if (DATA_WIDTH == 256) begin
+            tuser[32:1] = parity[31:0];     // [32:1]  parity (32 bits)
+        end else begin
+            tuser[64:1] = parity[63:0];     // [64:1]  parity (64 bits)
+        end
 
         return tuser;
     endfunction : encode_cc_tuser
