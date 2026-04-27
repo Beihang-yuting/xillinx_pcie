@@ -17,6 +17,9 @@ package xilinx_pcie_pkg;
     // 包含本项目类型定义（枚举、结构体、helper 类、函数）
     `include "xilinx_pcie_types.sv"
 
+    // 环境配置对象（14 个参数组，供 env/agent/scb/cov 使用）
+    `include "env/xilinx_pcie_env_config.sv"
+
     // 后续 Task 中将在此处追加以下 include：
     // `include "cfg/xilinx_pcie_cfg.sv"
     // `include "codec/xilinx_rq_codec.sv"
