@@ -34,6 +34,12 @@ class xilinx_pcie_env extends uvm_env;
     // EP Agent：Endpoint 特化 agent
     xilinx_pcie_ep_agent                ep_agent;
 
+    // RC 侧中断 Agent（cfg_interrupt 驱动/监控）
+    xilinx_pcie_interrupt_agent         rc_int_agent;
+
+    // EP 侧中断 Agent（cfg_interrupt 驱动/监控）
+    xilinx_pcie_interrupt_agent         ep_int_agent;
+
     // 虚拟 Sequencer：聚合 RC/EP sequencer
     xilinx_pcie_virtual_sequencer       v_sqr;
 
@@ -101,6 +107,27 @@ class xilinx_pcie_env extends uvm_env;
         // -----------------------------------------------------------------
         rc_agent = xilinx_pcie_rc_agent::type_id::create("rc_agent", this);
         ep_agent = xilinx_pcie_ep_agent::type_id::create("ep_agent", this);
+
+        // -----------------------------------------------------------------
+        // 步骤 4b：若中断使能，创建 RC/EP 侧中断 Agent
+        // 实例名必须与 tb_top 中 config_db 注册的路径匹配：
+        //   uvm_test_top.env.rc_int_agent*  / ep_int_agent*
+        // 同时将 int_agent 引用注册到 config_db，供 msi_seq 的 body() 获取
+        // -----------------------------------------------------------------
+        if (cfg.interrupt_enable) begin
+            // 创建 RC 侧中断 agent
+            rc_int_agent = xilinx_pcie_interrupt_agent::type_id::create(
+                "rc_int_agent", this);
+
+            // 创建 EP 侧中断 agent
+            ep_int_agent = xilinx_pcie_interrupt_agent::type_id::create(
+                "ep_int_agent", this);
+
+            // 将 ep_int_agent 注册到 config_db，key="int_agent"
+            // 路径使用通配符 "*"，使 msi_seq 从任意 sequencer 上下文都能获取
+            uvm_config_db #(xilinx_pcie_interrupt_agent)::set(
+                this, "*", "int_agent", ep_int_agent);
+        end
 
         // -----------------------------------------------------------------
         // 步骤 5：创建 Virtual Sequencer（始终创建）

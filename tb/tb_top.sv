@@ -32,13 +32,23 @@ module tb_top;
     //=========================================================================
     // 编译期参数
     //=========================================================================
-    // AXI-Stream 数据位宽，使用 localparam 固定为 256bit（与 PG213 标准对齐）
-    localparam int DATA_WIDTH     = 256;
-    // 各通道 tuser 位宽（DATA_WIDTH=256 对应 PG213 Table 宽度）
-    localparam int RQ_TUSER_WIDTH = 137;
-    localparam int RC_TUSER_WIDTH = 161;
-    localparam int CQ_TUSER_WIDTH = 183;
-    localparam int CC_TUSER_WIDTH = 81;
+    // AXI-Stream 数据位宽，通过编译宏 `TB_DATA_WIDTH 配置（默认 256bit）
+    // 用法：vcs ... +define+TB_DATA_WIDTH=512
+    `ifndef TB_DATA_WIDTH
+        `define TB_DATA_WIDTH 256
+    `endif
+    localparam int DATA_WIDTH     = `TB_DATA_WIDTH;
+
+    // 各通道 tuser 位宽根据 DATA_WIDTH 自动选择（PG213 Table 规范）
+    // 64/128 -> 较小宽度；256 -> 中等宽度；512 -> 最大宽度
+    localparam int RQ_TUSER_WIDTH = (DATA_WIDTH == 512) ? 285 :
+                                    (DATA_WIDTH == 256) ? 137 : 62;
+    localparam int RC_TUSER_WIDTH = (DATA_WIDTH == 512) ? 321 :
+                                    (DATA_WIDTH == 256) ? 161 : 75;
+    localparam int CQ_TUSER_WIDTH = (DATA_WIDTH == 512) ? 375 :
+                                    (DATA_WIDTH == 256) ? 183 : 88;
+    localparam int CC_TUSER_WIDTH = (DATA_WIDTH == 512) ? 161 :
+                                    (DATA_WIDTH == 256) ? 81  : 33;
     // per-DW keep 位宽
     localparam int KEEP_WIDTH     = DATA_WIDTH / 32;
 

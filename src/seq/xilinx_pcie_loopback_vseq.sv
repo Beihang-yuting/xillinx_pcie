@@ -18,6 +18,16 @@ class xilinx_pcie_loopback_vseq extends uvm_sequence;
     // 最大 payload 字节数（用于 Memory 和 DMA 阶段）
     rand int max_payload_bytes;
 
+    // 阶段 2 批量模式：1=先发所有 MWr 再发所有 MRd，0=交替 MWr+MRd
+    bit batch_mode = 1'b0;
+
+    // 阶段 2 MWr 和 MRd 之间的等待时间（ns）
+    int unsigned wr_rd_gap_ns = 500;
+
+    // 阶段 2 每对 MWr+MRd 之间的间隔（ns），用于等待 completion 返回释放 tag
+    // 默认 0 表示不额外等待（适合小规模测试）
+    int unsigned inter_pair_gap_ns = 0;
+
     //=========================================================================
     // 默认值约束
     //=========================================================================
@@ -154,49 +164,124 @@ class xilinx_pcie_loopback_vseq extends uvm_sequence;
 
         base_addr = 64'h0000_0001_0000_0000;  // 高于 4GB，测试 64 位地址
 
-        for (int i = 0; i < num_transactions; i++) begin
-            xilinx_pcie_mem_seq wr_seq, rd_seq;
-            bit [63:0] target_addr;
+        payload_size = (max_payload_bytes < cfg.max_payload_size) ?
+                        max_payload_bytes : cfg.max_payload_size;
 
-            // 计算本次事务的地址（每次偏移 payload_size，避免地址重叠）
-            payload_size = (max_payload_bytes < cfg.max_payload_size) ?
-                            max_payload_bytes : cfg.max_payload_size;
-            target_addr = base_addr + i * payload_size;
+        if (batch_mode) begin
+            // ================================================================
+            // 批量模式：先发所有 MWr，等待一段时间，再发所有 MRd
+            // 避免交替发送时的时序竞争，适合大流量压力测试
+            // ================================================================
 
-            // --- MWr ---
-            wr_seq = xilinx_pcie_mem_seq::type_id::create(
-                $sformatf("mwr_%0d", i));
-            wr_seq.addr     = target_addr;
-            wr_seq.length   = payload_size;
-            wr_seq.is_write = 1'b1;
-            wr_seq.tc       = 3'h0;
-            wr_seq.attr     = 3'h0;
-            wr_seq.cfg      = cfg;
-            // 填充递增写数据
-            wr_seq.wr_data = new[payload_size];
-            for (int j = 0; j < payload_size; j++)
-                wr_seq.wr_data[j] = (i + j) & 8'hFF;
+            // --- 批量 MWr ---
+            `uvm_info(get_type_name(),
+                $sformatf("阶段 2 批量模式: 发送 %0d 笔 MWr", num_transactions),
+                UVM_MEDIUM)
 
-            wr_seq.start(v_sqr.rc_sqr);
+            for (int i = 0; i < num_transactions; i++) begin
+                xilinx_pcie_mem_seq wr_seq;
+                bit [63:0] target_addr;
 
-            // 等待 EP 处理完 MWr（Posted 无 completion，需等 EP 写入内存后再读）
-            #500ns;
+                target_addr = base_addr + i * payload_size;
 
-            // --- MRd ---
-            rd_seq = xilinx_pcie_mem_seq::type_id::create(
-                $sformatf("mrd_%0d", i));
-            rd_seq.addr     = target_addr;
-            rd_seq.length   = payload_size;
-            rd_seq.is_write = 1'b0;
-            rd_seq.tc       = 3'h0;
-            rd_seq.attr     = 3'h0;
-            rd_seq.cfg      = cfg;
+                wr_seq = xilinx_pcie_mem_seq::type_id::create(
+                    $sformatf("mwr_%0d", i));
+                wr_seq.addr     = target_addr;
+                wr_seq.length   = payload_size;
+                wr_seq.is_write = 1'b1;
+                wr_seq.tc       = 3'h0;
+                wr_seq.attr     = 3'h0;
+                wr_seq.cfg      = cfg;
+                // 填充递增写数据
+                wr_seq.wr_data = new[payload_size];
+                for (int j = 0; j < payload_size; j++)
+                    wr_seq.wr_data[j] = (i + j) & 8'hFF;
 
-            rd_seq.start(v_sqr.rc_sqr);
+                wr_seq.start(v_sqr.rc_sqr);
+            end
+
+            // 等待 EP 处理完所有 MWr（Posted 无 completion）
+            `uvm_info(get_type_name(),
+                $sformatf("阶段 2 批量模式: 等待 %0dns 确保 EP 完成所有 MWr 存储",
+                          wr_rd_gap_ns),
+                UVM_MEDIUM)
+
+            // 使用动态延迟（wr_rd_gap_ns 的值由上层控制）
+            repeat (wr_rd_gap_ns) #1ns;
+
+            // --- 批量 MRd ---
+            `uvm_info(get_type_name(),
+                $sformatf("阶段 2 批量模式: 发送 %0d 笔 MRd", num_transactions),
+                UVM_MEDIUM)
+
+            for (int i = 0; i < num_transactions; i++) begin
+                xilinx_pcie_mem_seq rd_seq;
+                bit [63:0] target_addr;
+
+                target_addr = base_addr + i * payload_size;
+
+                rd_seq = xilinx_pcie_mem_seq::type_id::create(
+                    $sformatf("mrd_%0d", i));
+                rd_seq.addr     = target_addr;
+                rd_seq.length   = payload_size;
+                rd_seq.is_write = 1'b0;
+                rd_seq.tc       = 3'h0;
+                rd_seq.attr     = 3'h0;
+                rd_seq.cfg      = cfg;
+
+                rd_seq.start(v_sqr.rc_sqr);
+            end
+
+        end else begin
+            // ================================================================
+            // 交替模式（默认）：逐对发送 MWr + MRd
+            // ================================================================
+            for (int i = 0; i < num_transactions; i++) begin
+                xilinx_pcie_mem_seq wr_seq, rd_seq;
+                bit [63:0] target_addr;
+
+                target_addr = base_addr + i * payload_size;
+
+                // --- MWr ---
+                wr_seq = xilinx_pcie_mem_seq::type_id::create(
+                    $sformatf("mwr_%0d", i));
+                wr_seq.addr     = target_addr;
+                wr_seq.length   = payload_size;
+                wr_seq.is_write = 1'b1;
+                wr_seq.tc       = 3'h0;
+                wr_seq.attr     = 3'h0;
+                wr_seq.cfg      = cfg;
+                // 填充递增写数据
+                wr_seq.wr_data = new[payload_size];
+                for (int j = 0; j < payload_size; j++)
+                    wr_seq.wr_data[j] = (i + j) & 8'hFF;
+
+                wr_seq.start(v_sqr.rc_sqr);
+
+                // 等待 EP 处理完 MWr（可配置间隔）
+                repeat (wr_rd_gap_ns) #1ns;
+
+                // --- MRd ---
+                rd_seq = xilinx_pcie_mem_seq::type_id::create(
+                    $sformatf("mrd_%0d", i));
+                rd_seq.addr     = target_addr;
+                rd_seq.length   = payload_size;
+                rd_seq.is_write = 1'b0;
+                rd_seq.tc       = 3'h0;
+                rd_seq.attr     = 3'h0;
+                rd_seq.cfg      = cfg;
+
+                rd_seq.start(v_sqr.rc_sqr);
+
+                // 对间间隔：等待 completion 返回释放 tag，防止 tag 池耗尽
+                if (inter_pair_gap_ns > 0)
+                    repeat (inter_pair_gap_ns) #1ns;
+            end
         end
 
         `uvm_info(get_type_name(),
-            $sformatf("阶段 2 完成: %0d 对 MWr+MRd", num_transactions),
+            $sformatf("阶段 2 完成: %0d 对 MWr+MRd (batch_mode=%0b)",
+                      num_transactions, batch_mode),
             UVM_MEDIUM)
     endtask : _phase_mem_rw
 
