@@ -23,13 +23,15 @@ package xilinx_pcie_pkg;
     // 描述符编解码器：提供 RQ/RC/CQ/CC 四个通道的 TLP <-> 描述符转换静态函数
     `include "codec/xilinx_desc_codec.sv"
 
+    // tuser 编解码器：提供四个通道的 AXI-Stream tuser 字段编解码（需实例化，DATA_WIDTH 参数化）
+    `include "codec/xilinx_tuser_codec.sv"
+
     // 后续 Task 中将在此处追加以下 include：
     // `include "cfg/xilinx_pcie_cfg.sv"
     // `include "codec/xilinx_rq_codec.sv"
     // `include "codec/xilinx_rc_codec.sv"
     // `include "codec/xilinx_cq_codec.sv"
     // `include "codec/xilinx_cc_codec.sv"
-    // `include "codec/xilinx_tuser_codec.sv"
     // `include "agent/xilinx_pcie_driver.sv"
     // `include "agent/xilinx_pcie_monitor.sv"
     // `include "agent/xilinx_pcie_agent.sv"
