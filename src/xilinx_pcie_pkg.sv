@@ -47,8 +47,13 @@ package xilinx_pcie_pkg;
     // EP Agent：Endpoint 特化，支持自动回复、内存模型和 DMA 发起
     `include "agent/xilinx_pcie_ep_agent.sv"
 
+    // cfg_mgmt 边带接口驱动/监控 Agent（EP 提供 cfg_read/write task，RC 自动响应）
+    `include "cfg/xilinx_pcie_cfg_agent.sv"
+
+    // 中断边带接口 Agent（支持 Legacy INTx / MSI / MSI-X 三种模式）
+    `include "cfg/xilinx_pcie_interrupt_agent.sv"
+
     // 后续 Task 中将在此处追加以下 include：
-    // `include "cfg/xilinx_pcie_cfg.sv"
     // `include "agent/xilinx_pcie_agent.sv"
     // `include "env/xilinx_pcie_scoreboard.sv"
     // `include "env/xilinx_pcie_coverage.sv"
