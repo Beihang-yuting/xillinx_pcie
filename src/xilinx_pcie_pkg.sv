@@ -53,11 +53,19 @@ package xilinx_pcie_pkg;
     // 中断边带接口 Agent（支持 Legacy INTx / MSI / MSI-X 三种模式）
     `include "cfg/xilinx_pcie_interrupt_agent.sv"
 
+    // 虚拟 Sequencer：聚合 RC/EP sequencer，供顶层虚拟序列使用
+    `include "env/xilinx_pcie_virtual_sequencer.sv"
+
+    // Scoreboard：4 路 TLP 流量检查（Completion 匹配、数据完整性、排序、描述符）
+    `include "env/xilinx_pcie_scoreboard.sv"
+
+    // Coverage：6 个 covergroup 采样 TLP 功能覆盖率
+    `include "env/xilinx_pcie_coverage.sv"
+
+    // 顶层环境：组装 RC/EP agent、scoreboard、coverage、virtual sequencer
+    `include "env/xilinx_pcie_env.sv"
+
     // 后续 Task 中将在此处追加以下 include：
-    // `include "agent/xilinx_pcie_agent.sv"
-    // `include "env/xilinx_pcie_scoreboard.sv"
-    // `include "env/xilinx_pcie_coverage.sv"
-    // `include "env/xilinx_pcie_env.sv"
     // `include "seq/xilinx_pcie_base_seq.sv"
 
 endpackage : xilinx_pcie_pkg
