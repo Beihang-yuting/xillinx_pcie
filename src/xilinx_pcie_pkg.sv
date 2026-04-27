@@ -83,4 +83,7 @@ package xilinx_pcie_pkg;
     // 序列库：回环虚拟序列（5 阶段：Config/MemRW/DMA/中断/Straddle 压力）
     `include "seq/xilinx_pcie_loopback_vseq.sv"
 
+    // 序列库：超大规模压力测试虚拟序列（20000+ 报文，多轮混合 payload）
+    `include "seq/xilinx_pcie_mega_stress_vseq.sv"
+
 endpackage : xilinx_pcie_pkg
