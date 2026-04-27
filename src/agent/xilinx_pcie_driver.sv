@@ -23,6 +23,27 @@
 //       若需完整 tuser 支持，须扩展 axis_transfer.tuser 宽度。
 //=============================================================================
 
+// 内部辅助 sequence：用于在指定 axis_sequencer 上发送单个 axis_transfer
+// uvm_driver 不能直接调用 start_item/finish_item，必须通过 sequence 发送
+class axis_oneshot_seq extends uvm_sequence #(axis_transfer);
+
+    `uvm_object_utils(axis_oneshot_seq)
+
+    // 待发送的 axis_transfer 事务
+    axis_transfer xfer;
+
+    function new(string name = "axis_oneshot_seq");
+        super.new(name);
+    endfunction : new
+
+    virtual task body();
+        // 通过 sequence 的 start_item/finish_item 将 xfer 发送到 sequencer
+        start_item(xfer);
+        finish_item(xfer);
+    endtask : body
+
+endclass : axis_oneshot_seq
+
 class xilinx_pcie_driver extends uvm_driver #(pcie_tl_tlp);
 
     `uvm_component_utils(xilinx_pcie_driver)
@@ -278,10 +299,16 @@ class xilinx_pcie_driver extends uvm_driver #(pcie_tl_tlp);
 
             // -----------------------------------------------------------------
             // 步骤 8：通过 axis_sequencer 发送
-            // 使用 start_item / finish_item 协议
+            // 使用内部 one-shot sequence 将 xfer 发送到目标 sequencer
+            // （uvm_driver 不能直接调用 start_item/finish_item）
             // -----------------------------------------------------------------
-            start_item(xfer, -1, sqr);
-            finish_item(xfer);
+            begin
+                axis_oneshot_seq oneshot;
+                oneshot = axis_oneshot_seq::type_id::create(
+                    $sformatf("oneshot_%s_%0d", channel.name(), i));
+                oneshot.xfer = xfer;
+                oneshot.start(sqr);
+            end
 
             `uvm_info(get_type_name(),
                 $sformatf("发送 beat[%0d/%0d] 到 %s 通道, tlast=%0b",

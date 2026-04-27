@@ -9,6 +9,28 @@
 //   4. Completion 生成：根据请求自动构建 CplD/Cpl 响应
 //=============================================================================
 
+// 内部辅助 sequence：用于在 TLP sequencer 上发送单个 pcie_tl_tlp
+// agent 不能直接调用 sequencer.wait_for_grant()/send_request()，
+// 必须通过 sequence 的 start_item/finish_item 协议发送
+class tlp_oneshot_seq extends uvm_sequence #(pcie_tl_tlp);
+
+    `uvm_object_utils(tlp_oneshot_seq)
+
+    // 待发送的 TLP 事务
+    pcie_tl_tlp tlp_item;
+
+    function new(string name = "tlp_oneshot_seq");
+        super.new(name);
+    endfunction : new
+
+    virtual task body();
+        // 通过 sequence 的 start_item/finish_item 将 TLP 发送到 sequencer
+        start_item(tlp_item);
+        finish_item(tlp_item);
+    endtask : body
+
+endclass : tlp_oneshot_seq
+
 class xilinx_pcie_ep_agent extends xilinx_pcie_base_agent;
 
     `uvm_component_utils(xilinx_pcie_ep_agent)
@@ -379,13 +401,15 @@ class xilinx_pcie_ep_agent extends xilinx_pcie_base_agent;
                 end
             end
 
-            // 通过 sequencer 发送
+            // 通过 one-shot sequence 在 sequencer 上发送 Completion
+            // （不能直接调用 sequencer 的低级 API）
             begin
                 pcie_tl_cpl_tlp cpl_clone;
+                tlp_oneshot_seq oneshot;
                 $cast(cpl_clone, cpl.clone());
-                sequencer.wait_for_grant();
-                sequencer.send_request(cpl_clone);
-                sequencer.wait_for_item_done();
+                oneshot = tlp_oneshot_seq::type_id::create("cpl_oneshot");
+                oneshot.tlp_item = cpl_clone;
+                oneshot.start(sequencer);
             end
 
             `uvm_info(get_type_name(),
@@ -436,10 +460,14 @@ class xilinx_pcie_ep_agent extends xilinx_pcie_base_agent;
         dma_tlp.ep_bit       = 1'b0;
         dma_tlp.tag          = 10'h0;  // 由 driver 的 tag_mgr 自动分配
 
-        // 通过 sequencer 发送
-        sequencer.wait_for_grant();
-        sequencer.send_request(dma_tlp);
-        sequencer.wait_for_item_done();
+        // 通过 one-shot sequence 在 sequencer 上发送 DMA TLP
+        // （不能直接调用 sequencer 的低级 API）
+        begin
+            tlp_oneshot_seq oneshot;
+            oneshot = tlp_oneshot_seq::type_id::create("dma_oneshot");
+            oneshot.tlp_item = dma_tlp;
+            oneshot.start(sequencer);
+        end
 
         `uvm_info(get_type_name(),
             $sformatf("DMA %s 已发起: addr=0x%016h, size=%0d bytes",
