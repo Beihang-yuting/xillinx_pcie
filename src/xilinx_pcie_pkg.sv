@@ -32,14 +32,14 @@ package xilinx_pcie_pkg;
     // 通道路由器：根据 BFM 角色和 TLP 类别决定使用哪个 AXI-Stream 通道（TX/RX）
     `include "agent/xilinx_pcie_channel_router.sv"
 
+    // PCIe TLP Driver：将 pcie_tl_tlp 编码为 AXI-Stream beat 序列并发送（11 步流水线）
+    `include "agent/xilinx_pcie_driver.sv"
+
+    // PCIe TLP Monitor：监听 4 个 axis_agent 输出，将 AXI-Stream 包解码回 pcie_tl_tlp
+    `include "agent/xilinx_pcie_monitor.sv"
+
     // 后续 Task 中将在此处追加以下 include：
     // `include "cfg/xilinx_pcie_cfg.sv"
-    // `include "codec/xilinx_rq_codec.sv"
-    // `include "codec/xilinx_rc_codec.sv"
-    // `include "codec/xilinx_cq_codec.sv"
-    // `include "codec/xilinx_cc_codec.sv"
-    // `include "agent/xilinx_pcie_driver.sv"
-    // `include "agent/xilinx_pcie_monitor.sv"
     // `include "agent/xilinx_pcie_agent.sv"
     // `include "env/xilinx_pcie_scoreboard.sv"
     // `include "env/xilinx_pcie_coverage.sv"
