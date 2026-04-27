@@ -26,6 +26,12 @@ package xilinx_pcie_pkg;
     // tuser 编解码器：提供四个通道的 AXI-Stream tuser 字段编解码（需实例化，DATA_WIDTH 参数化）
     `include "codec/xilinx_tuser_codec.sv"
 
+    // Straddle 引擎：将单个 TLP 的 descriptor + payload 打包/拆包为 AXI-Stream beat 序列
+    `include "codec/xilinx_straddle_engine.sv"
+
+    // 通道路由器：根据 BFM 角色和 TLP 类别决定使用哪个 AXI-Stream 通道（TX/RX）
+    `include "agent/xilinx_pcie_channel_router.sv"
+
     // 后续 Task 中将在此处追加以下 include：
     // `include "cfg/xilinx_pcie_cfg.sv"
     // `include "codec/xilinx_rq_codec.sv"
