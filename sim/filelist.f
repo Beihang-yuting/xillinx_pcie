@@ -4,15 +4,16 @@
 //=============================================================================
 
 //-----------------------------------------------------------------------------
-// 1. AXI-Stream VIP（axis_work）：直接引用其 filelist
+// 1. AXI-Stream VIP（axis_work）：引用 lib-only filelist（绝对路径，无 tests/tb）
 //-----------------------------------------------------------------------------
--f /home/ubuntu/ryan/axis_work/axis_vip/sim/filelist.f
+-f /home/ubuntu/ryan/axis_work/axis_vip/sim/filelist_lib.f
 
 //-----------------------------------------------------------------------------
 // 2. PCIe TL VIP（pcie_work）：头文件搜索路径 + 源文件
 //-----------------------------------------------------------------------------
 
 // 头文件搜索路径（各子目录均需加入，以便 `include 能找到对应文件）
++incdir+/home/ubuntu/ryan/pcie_work/pcie_tl_vip/src
 +incdir+/home/ubuntu/ryan/pcie_work/pcie_tl_vip/src/types
 +incdir+/home/ubuntu/ryan/pcie_work/pcie_tl_vip/src/shared
 +incdir+/home/ubuntu/ryan/pcie_work/pcie_tl_vip/src/agent
@@ -35,6 +36,7 @@
 //-----------------------------------------------------------------------------
 
 // 头文件搜索路径
++incdir+/home/ubuntu/ryan/axis_work/axis_vip/src
 +incdir+/home/ubuntu/ryan/xilinx_pcie/src
 +incdir+/home/ubuntu/ryan/xilinx_pcie/src/codec
 +incdir+/home/ubuntu/ryan/xilinx_pcie/src/agent

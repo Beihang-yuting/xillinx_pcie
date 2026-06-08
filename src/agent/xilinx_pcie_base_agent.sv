@@ -51,13 +51,13 @@ class xilinx_pcie_base_agent extends uvm_agent;
     //=========================================================================
 
     // RQ（Requester Request）通道 agent
-    axis_agent                          rq_agent;
+    axis_agent_rq_t                     rq_agent;
     // RC（Requester Completion）通道 agent
-    axis_agent                          rc_agent;
+    axis_agent_rc_t                     rc_agent;
     // CQ（Completer Request）通道 agent
-    axis_agent                          cq_agent;
+    axis_agent_cq_t                     cq_agent;
     // CC（Completer Completion）通道 agent
-    axis_agent                          cc_agent;
+    axis_agent_cc_t                     cc_agent;
 
     //=========================================================================
     // TL 层共享管理器
@@ -126,11 +126,29 @@ class xilinx_pcie_base_agent extends uvm_agent;
         // -----------------------------------------------------------------
         // 步骤 3：创建 4 个 AXI-Stream Agent
         // 每个通道独立创建 axis_config 并注册到 config_db
+        // 四通道 axis_agent 类型不同（按 PG213 真实 TUSER 宽度参数化），
+        // 无法用泛型 helper，逐通道内联 create + config 设置
         // -----------------------------------------------------------------
-        create_axis_agent("rq", XILINX_CH_RQ, rq_agent);
-        create_axis_agent("rc", XILINX_CH_RC, rc_agent);
-        create_axis_agent("cq", XILINX_CH_CQ, cq_agent);
-        create_axis_agent("cc", XILINX_CH_CC, cc_agent);
+        begin
+            axis_config acfg_rq = cfg.create_axis_config(XILINX_CH_RQ);
+            uvm_config_db #(axis_config)::set(this, "rq_agent*", "cfg", acfg_rq);
+            rq_agent = axis_agent_rq_t::type_id::create("rq_agent", this);
+        end
+        begin
+            axis_config acfg_rc = cfg.create_axis_config(XILINX_CH_RC);
+            uvm_config_db #(axis_config)::set(this, "rc_agent*", "cfg", acfg_rc);
+            rc_agent = axis_agent_rc_t::type_id::create("rc_agent", this);
+        end
+        begin
+            axis_config acfg_cq = cfg.create_axis_config(XILINX_CH_CQ);
+            uvm_config_db #(axis_config)::set(this, "cq_agent*", "cfg", acfg_cq);
+            cq_agent = axis_agent_cq_t::type_id::create("cq_agent", this);
+        end
+        begin
+            axis_config acfg_cc = cfg.create_axis_config(XILINX_CH_CC);
+            uvm_config_db #(axis_config)::set(this, "cc_agent*", "cfg", acfg_cc);
+            cc_agent = axis_agent_cc_t::type_id::create("cc_agent", this);
+        end
 
         // -----------------------------------------------------------------
         // 步骤 4：若为 ACTIVE 模式，创建 sequencer 和 driver
@@ -200,17 +218,30 @@ class xilinx_pcie_base_agent extends uvm_agent;
         // axis_agent 的 rst_listener 需要 reset_handler 的事件引用
         // 我们不使用 axis_env，所以手动创建 dummy 事件防止 null 访问
         // -----------------------------------------------------------------
+        // 四通道 agent 类型不同，无法放入同一队列，逐通道分别设置
         begin
             uvm_event dummy_assert_evt  = new("dummy_reset_assert");
             uvm_event dummy_active_evt  = new("dummy_reset_active");
             uvm_event dummy_deassert_evt = new("dummy_reset_deassert");
-            axis_agent agents[$] = '{rq_agent, rc_agent, cq_agent, cc_agent};
-            foreach (agents[i]) begin
-                if (agents[i].rst_listener != null) begin
-                    agents[i].rst_listener.reset_asserted_evt   = dummy_assert_evt;
-                    agents[i].rst_listener.reset_active_evt     = dummy_active_evt;
-                    agents[i].rst_listener.reset_deasserted_evt = dummy_deassert_evt;
-                end
+            if (rq_agent.rst_listener != null) begin
+                rq_agent.rst_listener.reset_asserted_evt   = dummy_assert_evt;
+                rq_agent.rst_listener.reset_active_evt     = dummy_active_evt;
+                rq_agent.rst_listener.reset_deasserted_evt = dummy_deassert_evt;
+            end
+            if (rc_agent.rst_listener != null) begin
+                rc_agent.rst_listener.reset_asserted_evt   = dummy_assert_evt;
+                rc_agent.rst_listener.reset_active_evt     = dummy_active_evt;
+                rc_agent.rst_listener.reset_deasserted_evt = dummy_deassert_evt;
+            end
+            if (cq_agent.rst_listener != null) begin
+                cq_agent.rst_listener.reset_asserted_evt   = dummy_assert_evt;
+                cq_agent.rst_listener.reset_active_evt     = dummy_active_evt;
+                cq_agent.rst_listener.reset_deasserted_evt = dummy_deassert_evt;
+            end
+            if (cc_agent.rst_listener != null) begin
+                cc_agent.rst_listener.reset_asserted_evt   = dummy_assert_evt;
+                cc_agent.rst_listener.reset_active_evt     = dummy_active_evt;
+                cc_agent.rst_listener.reset_deasserted_evt = dummy_deassert_evt;
             end
         end
 
@@ -263,26 +294,5 @@ class xilinx_pcie_base_agent extends uvm_agent;
         end
 
     endfunction : connect_phase
-
-    //=========================================================================
-    // 辅助方法：创建单个 axis_agent 及其配置
-    //=========================================================================
-    protected function void create_axis_agent(
-        string              name,
-        xilinx_channel_e    ch,
-        ref axis_agent      agt
-    );
-        axis_config acfg;
-
-        // 创建 axis_config（根据角色、通道、带宽参数）
-        acfg = cfg.create_axis_config(ch);
-
-        // 注册到 config_db，让 axis_agent 的 build_phase 能获取
-        uvm_config_db #(axis_config)::set(
-            this, $sformatf("%s_agent*", name), "cfg", acfg);
-
-        // 创建 axis_agent 实例
-        agt = axis_agent::type_id::create($sformatf("%s_agent", name), this);
-    endfunction : create_axis_agent
 
 endclass : xilinx_pcie_base_agent

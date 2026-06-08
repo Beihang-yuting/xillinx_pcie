@@ -50,17 +50,27 @@ class xilinx_pcie_rc_agent extends xilinx_pcie_base_agent;
         uvm_config_db #(xilinx_pcie_env_config)::set(this, "*", "cfg", cfg);
         // 调用父类 build（会再次 get cfg，此时 role 已是 RC）
         super.build_phase(phase);
+        // analysis_imp 必须在 build_phase 创建 (UVM 规定)
+        rc_rx_imp = new("rc_rx_imp", this);
     endfunction : build_phase
 
     //=========================================================================
     // connect_phase：调用父类连接后，订阅分析端口
     //=========================================================================
+    // analysis_imp 订阅 monitor.tlp_rx_ap, 触发 completion 释放 tag
+    typedef uvm_analysis_imp #(pcie_tl_tlp, xilinx_pcie_rc_agent) rc_rx_imp_t;
+    rc_rx_imp_t rc_rx_imp;
+
     virtual function void connect_phase(uvm_phase phase);
         super.connect_phase(phase);
-
-        // 订阅 driver 的 tlp_tx_ap 以追踪发出的 Non-Posted 请求
-        // 注意：通过 run_phase 中的后台任务处理超时检查
+        if (monitor != null && rc_rx_imp != null)
+            monitor.tlp_rx_ap.connect(rc_rx_imp);
     endfunction : connect_phase
+
+    // analysis_imp 回调: 所有 RX TLP 进 handle_completion (内部仅处理 cpl 类型)
+    function void write(pcie_tl_tlp t);
+        handle_completion(t);
+    endfunction : write
 
     //=========================================================================
     // run_phase：启动 completion 超时检查后台任务
@@ -109,15 +119,20 @@ class xilinx_pcie_rc_agent extends xilinx_pcie_base_agent;
                     cpl.tag, cpl.cpl_status.name(), $time - outstanding_times[cpl.tag]),
                 UVM_MEDIUM)
 
-            // 释放 outstanding 记录和 tag
+            // 释放 outstanding 记录
             outstanding_reqs.delete(cpl.tag);
             outstanding_times.delete(cpl.tag);
-            tag_mgr.free_tag(cpl.tag, 0);
         end else begin
-            `uvm_warning(get_type_name(),
-                $sformatf("收到未匹配的 Completion: tag=0x%03h, requester_id=0x%04h",
-                    cpl.tag, cpl.requester_id))
+            `uvm_info(get_type_name(),
+                $sformatf("收到 Completion (无显式 outstanding 注册): tag=0x%03h, req_id=0x%04h",
+                    cpl.tag, cpl.requester_id),
+                UVM_HIGH)
         end
+
+        // 始终释放 tag — driver 在 alloc 时未必走 register_outstanding_req 路径
+        // 因此只要收到 cpl 就归还 tag, 避免 pool 泄漏
+        if (tag_mgr != null)
+            tag_mgr.free_tag(cpl.tag, 0);
     endfunction : handle_completion
 
     //=========================================================================

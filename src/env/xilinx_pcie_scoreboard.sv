@@ -453,9 +453,12 @@ class xilinx_pcie_scoreboard extends uvm_scoreboard;
 
         // 仅对请求和 completion 类型执行编解码往返检查
         if (cat == TLP_CAT_NON_POSTED || cat == TLP_CAT_POSTED) begin
-            // 请求类型使用 RQ 通道编码
-            desc_128 = xilinx_desc_codec::encode_rq(tlp);
-            decoded  = xilinx_desc_codec::decode_rq(desc_128, tlp.payload);
+            // 请求类型使用 RQ 通道编码 (with_tag98: desc + tuser tag[9:8] 双载体)
+            begin
+                bit [1:0] tag_9_8;
+                desc_128 = xilinx_desc_codec::encode_rq_with_tag98(tlp, tag_9_8);
+                decoded  = xilinx_desc_codec::decode_rq_with_tag98(desc_128, tag_9_8, tlp.payload);
+            end
 
             if (decoded == null) begin
                 desc_format_errors++;
@@ -485,7 +488,7 @@ class xilinx_pcie_scoreboard extends uvm_scoreboard;
                 return;
             end
 
-            if (!compare_tlp_fields(tlp, decoded)) begin
+            if (!compare_tlp_fields_cpl(tlp, decoded)) begin
                 desc_format_errors++;
                 `uvm_error(get_type_name(),
                     $sformatf("[%s] Completion 描述符往返不一致: tag=0x%03h",
@@ -505,6 +508,17 @@ class xilinx_pcie_scoreboard extends uvm_scoreboard;
         if (a.tag          !== b.tag)          return 1'b0;
         return 1'b1;
     endfunction : compare_tlp_fields
+
+    // CPL 路径比较: RC/CC 描述符仅 8-bit tag, 截低位比较 desc round-trip 一致性
+    // (扩展 tag[9:8] 在完成路径上不由 desc 携带, 与硬件兼容性见 PG213)
+    protected function bit compare_tlp_fields_cpl(pcie_tl_tlp a, pcie_tl_tlp b);
+        if (a.kind         !== b.kind)            return 1'b0;
+        if (a.tc           !== b.tc)              return 1'b0;
+        if (a.length       !== b.length)          return 1'b0;
+        if (a.requester_id !== b.requester_id)    return 1'b0;
+        if (a.tag[7:0]     !== b.tag[7:0])        return 1'b0;
+        return 1'b1;
+    endfunction : compare_tlp_fields_cpl
 
     //=========================================================================
     // report_phase：输出统计摘要，检查未完成请求

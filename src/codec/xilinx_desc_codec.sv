@@ -575,4 +575,53 @@ class xilinx_desc_codec;
         return decode_rc(desc, payload);
     endfunction : decode_cc
 
+    //=========================================================================
+    // 扩展 tag 支持的 with_tag98 重载 (PG213: tag[9:8] 在 tuser 中携带)
+    // RQ/CQ 通道使用; 与原 encode/decode 并存, 不破坏现有调用.
+    //=========================================================================
+
+    // RQ encode with tag[9:8] output (送到 tuser)
+    static function bit [127:0] encode_rq_with_tag98(
+        pcie_tl_tlp tlp,
+        output bit [1:0] tag_9_8
+    );
+        tag_9_8 = tlp.tag[9:8];
+        return encode_rq(tlp);
+    endfunction : encode_rq_with_tag98
+
+    // RQ decode reassembling tag[9:0] from desc[103:96] + tag_9_8
+    static function pcie_tl_tlp decode_rq_with_tag98(
+        bit [127:0] desc,
+        bit [1:0]   tag_9_8,
+        bit [7:0]   payload[]
+    );
+        pcie_tl_tlp t;
+        t = decode_rq(desc, payload);
+        if (t != null)
+            t.tag = {tag_9_8, desc[103:96]};
+        return t;
+    endfunction : decode_rq_with_tag98
+
+    // CQ encode with tag[9:8] output (送到 tuser)
+    static function bit [127:0] encode_cq_with_tag98(
+        pcie_tl_tlp tlp,
+        output bit [1:0] tag_9_8
+    );
+        tag_9_8 = tlp.tag[9:8];
+        return encode_cq(tlp);
+    endfunction : encode_cq_with_tag98
+
+    // CQ decode reassembling tag[9:0] from desc[103:96] + tag_9_8
+    static function pcie_tl_tlp decode_cq_with_tag98(
+        bit [127:0] desc,
+        bit [1:0]   tag_9_8,
+        bit [7:0]   payload[]
+    );
+        pcie_tl_tlp t;
+        t = decode_cq(desc, payload);
+        if (t != null)
+            t.tag = {tag_9_8, desc[103:96]};
+        return t;
+    endfunction : decode_cq_with_tag98
+
 endclass : xilinx_desc_codec

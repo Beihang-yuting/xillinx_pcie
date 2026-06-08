@@ -20,8 +20,7 @@
 //   6. 合并 tag[9:8] 到 tlp.tag
 //   7. 发布到 tlp_rx_ap
 //
-// 注意：axis_transfer.tuser 仅 128 位宽，高位 tuser 字段可能不可见。
-//       对于 64/128 位 DATA_WIDTH，tuser 完整可用。
+// axis_transfer.tuser 容器已加宽到 512 位，各通道 PG213 tuser 字段完整可见。
 //=============================================================================
 
 // analysis_imp 宏声明（必须在 class 定义之前）
@@ -150,7 +149,7 @@ class xilinx_pcie_monitor extends uvm_component;
         bit [127:0]  descriptor;     // 解码后的描述符
         bit [7:0]    payload[$];     // 解码后的 payload 字节队列
         bit [7:0]    payload_arr[];  // 转为动态数组供 codec 使用
-        bit [127:0]  first_tuser;    // 首 beat 的 tuser（用于提取 tag[9:8]）
+        bit [511:0]  first_tuser;    // 首 beat 的 tuser（用于提取 tag[9:8]）
         bit [1:0]    tag_9_8;        // Tag 高 2 位
         pcie_tl_tlp  tlp;
 
@@ -243,10 +242,9 @@ class xilinx_pcie_monitor extends uvm_component;
     //=========================================================================
     // extract_tag_9_8：从首 beat 的 tuser 中提取 Tag 高 2 位
     // 根据通道类型选择正确的 decode 方法
-    // 注意：axis_transfer.tuser 仅 128 位，高位补零后传入 decode
     //=========================================================================
     protected function bit [1:0] extract_tag_9_8(
-        bit [127:0]      tuser,
+        bit [511:0]      tuser,
         xilinx_channel_e channel
     );
         bit [1:0] tag_9_8;
@@ -265,9 +263,8 @@ class xilinx_pcie_monitor extends uvm_component;
                 bit [5:0]   seq_num_0;
                 bit [5:0]   seq_num_1;
 
-                // 将 128 位 tuser 扩展到 285 位（高位补零）
                 tuser_codec.decode_rq_tuser(
-                    .tuser       ({157'h0, tuser}),
+                    .tuser       (tuser[284:0]),
                     .first_be    (first_be),
                     .last_be     (last_be),
                     .addr_offset (addr_offset),
@@ -297,9 +294,8 @@ class xilinx_pcie_monitor extends uvm_component;
                 bit         is_eop_1;
                 bit [2:0]   eop_offset_1;
 
-                // 将 128 位 tuser 扩展到 375 位（高位补零）
                 tuser_codec.decode_cq_tuser(
-                    .tuser        ({247'h0, tuser}),
+                    .tuser        (tuser[374:0]),
                     .first_be     (first_be),
                     .last_be      (last_be),
                     .byte_en      (byte_en),
@@ -342,7 +338,7 @@ class xilinx_pcie_monitor extends uvm_component;
     //=========================================================================
     protected function void apply_tuser_be(
         pcie_tl_tlp      tlp,
-        bit [127:0]      tuser,
+        bit [511:0]      tuser,
         xilinx_channel_e channel
     );
         pcie_tl_mem_tlp mem_tlp;
@@ -363,7 +359,7 @@ class xilinx_pcie_monitor extends uvm_component;
                 bit [1:0]   tag_9_8;
 
                 tuser_codec.decode_rq_tuser(
-                    .tuser       ({157'h0, tuser}),
+                    .tuser       (tuser[284:0]),
                     .first_be    (first_be),
                     .last_be     (last_be),
                     .addr_offset (addr_offset),
@@ -402,7 +398,7 @@ class xilinx_pcie_monitor extends uvm_component;
                 bit [1:0]   tag_9_8;
 
                 tuser_codec.decode_cq_tuser(
-                    .tuser        ({247'h0, tuser}),
+                    .tuser        (tuser[374:0]),
                     .first_be     (first_be),
                     .last_be      (last_be),
                     .byte_en      (byte_en),

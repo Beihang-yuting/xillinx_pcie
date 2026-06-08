@@ -14,6 +14,16 @@ package xilinx_pcie_pkg;
     // 导入 PCIe TL VIP package（提供 pcie_tl_tlp、pcie_tl_pkg 中所有类型）
     import pcie_tl_pkg::*;
 
+    // 编译期宽度宏 (DATA_WIDTH/KEEP_WIDTH/4 通道 TUSER 宽度)
+    // 由 +define+DATA_WIDTH=N 驱动, 默认 256
+    `include "xilinx_pcie_params.svh"
+
+    // ---- Per-channel parameterized axis_agent typedefs (PG213 真实宽度) ----
+    typedef axis_agent#(`XILINX_DATA_W,4,4,`XILINX_RQ_TUSER_W,0,1,1) axis_agent_rq_t;
+    typedef axis_agent#(`XILINX_DATA_W,4,4,`XILINX_RC_TUSER_W,0,1,1) axis_agent_rc_t;
+    typedef axis_agent#(`XILINX_DATA_W,4,4,`XILINX_CQ_TUSER_W,0,1,1) axis_agent_cq_t;
+    typedef axis_agent#(`XILINX_DATA_W,4,4,`XILINX_CC_TUSER_W,0,1,1) axis_agent_cc_t;
+
     // 包含本项目类型定义（枚举、结构体、helper 类、函数）
     `include "xilinx_pcie_types.sv"
 

@@ -18,9 +18,7 @@
 //   10. 发布到分析端口
 //   11. item_done
 //
-// 注意：axis_transfer.tuser 仅 128 位宽，而 PG213 tuser 最大可达 375 位。
-//       当 DATA_WIDTH >= 256 时，高位 tuser 字段会被截断。
-//       若需完整 tuser 支持，须扩展 axis_transfer.tuser 宽度。
+// axis_transfer.tuser 容器已加宽到 512 位，可完整承载各通道 PG213 tuser 字段。
 //=============================================================================
 
 // 内部辅助 sequence：用于在指定 axis_sequencer 上发送单个 axis_transfer
@@ -272,7 +270,7 @@ class xilinx_pcie_driver extends uvm_driver #(pcie_tl_tlp);
 
         for (int i = 0; i < num_beats; i++) begin
             axis_transfer xfer;
-            bit [127:0]   tuser_val;
+            bit [511:0]   tuser_val;
 
             // 创建 axis_transfer 序列项
             xfer = axis_transfer::type_id::create(
@@ -365,9 +363,8 @@ class xilinx_pcie_driver extends uvm_driver #(pcie_tl_tlp);
 
     //=========================================================================
     // encode_tuser_for_beat：为单个 beat 编码 tuser
-    // 注意：axis_transfer.tuser 仅 128 位，此处截断高位
     //=========================================================================
-    protected function bit [127:0] encode_tuser_for_beat(
+    protected function bit [511:0] encode_tuser_for_beat(
         pcie_tl_tlp      tlp,
         xilinx_channel_e channel,
         bit [511:0]      tdata,
@@ -376,7 +373,7 @@ class xilinx_pcie_driver extends uvm_driver #(pcie_tl_tlp);
         bit              is_last,
         bit [15:0]       dw_keep = 16'hFFFF
     );
-        bit [127:0] tuser_truncated;
+        bit [511:0] tuser_truncated;
 
         case (channel)
             XILINX_CH_RQ: begin
@@ -402,7 +399,7 @@ class xilinx_pcie_driver extends uvm_driver #(pcie_tl_tlp);
                     .tag_9_8     (beat_idx == 0 ? tag_9_8 : 2'h0),
                     .tdata       (tdata)
                 );
-                tuser_truncated = tuser_full[127:0];
+                tuser_truncated = tuser_full;
             end
 
             XILINX_CH_RC: begin
@@ -436,7 +433,7 @@ class xilinx_pcie_driver extends uvm_driver #(pcie_tl_tlp);
                         .tdata        (tdata)
                     );
                 end
-                tuser_truncated = tuser_full[127:0];
+                tuser_truncated = tuser_full;
             end
 
             XILINX_CH_CQ: begin
@@ -480,7 +477,7 @@ class xilinx_pcie_driver extends uvm_driver #(pcie_tl_tlp);
                         .tdata        (tdata)
                     );
                 end
-                tuser_truncated = tuser_full[127:0];
+                tuser_truncated = tuser_full;
             end
 
             XILINX_CH_CC: begin
@@ -491,7 +488,7 @@ class xilinx_pcie_driver extends uvm_driver #(pcie_tl_tlp);
                     .discontinue (1'b0),
                     .tdata       (tdata)
                 );
-                tuser_truncated = tuser_full[127:0];
+                tuser_truncated = tuser_full;
             end
 
             default: begin

@@ -256,10 +256,17 @@ class xilinx_pcie_ep_agent extends xilinx_pcie_base_agent;
             end
 
             // -----------------------------------------------------------------
-            // Completion 类型：EP 收到的 completion 不需要自动回复
+            // Completion 类型：EP 收到 DMA 完成回复
+            // 释放 EP 自身 DMA 请求占用的 tag, 否则 tag pool 会泄漏耗尽
             // -----------------------------------------------------------------
             TLP_CPL, TLP_CPLD, TLP_CPL_LK, TLP_CPLD_LK: begin
-                // 不做处理，由上层序列或 scoreboard 消费
+                pcie_tl_cpl_tlp cpl_in;
+                if ($cast(cpl_in, tlp) && tag_mgr != null) begin
+                    tag_mgr.free_tag(cpl_in.tag, 0);
+                    `uvm_info(get_type_name(),
+                        $sformatf("EP 释放 DMA tag=0x%03h (cpl 已收到)", cpl_in.tag),
+                        UVM_HIGH)
+                end
             end
 
             default: begin

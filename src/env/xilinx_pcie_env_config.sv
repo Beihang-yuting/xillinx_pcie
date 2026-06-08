@@ -22,7 +22,8 @@ class xilinx_pcie_env_config extends uvm_object;
     // 支持 64 / 128 / 256 / 512 位，必须与 Xilinx PCIe IP 配置一致
     //-------------------------------------------------------------------------
     // AXI-Stream tdata 数据位宽（单位：bit）
-    int                         DATA_WIDTH  = 256;
+    // 默认继承编译期宏 XILINX_DATA_W (由 +define+DATA_WIDTH=N 驱动)
+    int                         DATA_WIDTH  = `XILINX_DATA_W;
 
     //-------------------------------------------------------------------------
     // 参数组 3：Straddle 模式
