@@ -106,6 +106,22 @@ class xilinx_pcie_loopback_test extends xilinx_pcie_base_test;
         // 在 virtual sequencer 上启动序列（5 阶段全量执行）
         vseq.start(env.v_sqr);
 
+        `uvm_info(get_type_name(), "===== Loopback 序列完成，等待在途 Completion 排空 =====", UVM_LOW)
+
+        // drain：最后一批 MEM_RD（含 4096B 大读）的 CplD 仍在途中。轮询
+        // scoreboard 在途请求清零再撤销 objection；500us 上限防止真实挂死时死等。
+        begin
+            int unsigned drain_us = 0;
+            while (env.scb != null && env.scb.outstanding_reqs.size() > 0 &&
+                   drain_us < 500) begin
+                #1us;
+                drain_us++;
+            end
+            if (env.scb != null && env.scb.outstanding_reqs.size() > 0)
+                `uvm_warning(get_type_name(),
+                    $sformatf("drain 超时：仍有 %0d 笔在途请求", env.scb.outstanding_reqs.size()))
+        end
+
         `uvm_info(get_type_name(), "===== Loopback Stress Test 完成 =====", UVM_LOW)
 
         phase.drop_objection(this, "xilinx_pcie_loopback_test");
