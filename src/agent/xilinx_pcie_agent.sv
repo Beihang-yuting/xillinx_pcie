@@ -415,10 +415,12 @@ class xilinx_pcie_agent extends uvm_agent;
     // write：统一 RX analysis imp 回调，按 role 分发
     // RC：处理 completion（outstanding 释放 + tag free）
     // EP：处理请求（自动响应 MRd/MWr/IO/Cfg）；DMA completion 也在此释放 tag
+    // 统一内存路径（use_unified_mem=1）：访存请求经 mem_resp 应答；
+    //   EP 仍先走 handle_rx_tlp 处理 Cfg/IO 类型；mem_resp 仅处理 MRd/MWr/Atomic
     //=========================================================================
     function void write(pcie_tl_tlp t);
         if (t.kind inside {TLP_CPL, TLP_CPLD, TLP_CPL_LK, TLP_CPLD_LK}) begin
-            // Completion 包
+            // Completion 包 —— UNCHANGED
             if (cfg.role == XILINX_PCIE_RC) begin
                 handle_completion(t);
             end else if (cfg.role == XILINX_PCIE_EP) begin
@@ -433,12 +435,34 @@ class xilinx_pcie_agent extends uvm_agent;
             end
         end else begin
             // 非 Completion 包（请求类）
-            if (cfg.role == XILINX_PCIE_EP) begin
-                `uvm_info(get_type_name(),
-                    $sformatf("write() 回调: kind=%s, tag=0x%03h, payload=%0d bytes",
-                        t.kind.name(), t.tag, t.payload.size()),
-                    UVM_MEDIUM)
-                handle_rx_tlp(t);
+            if (cfg.use_unified_mem) begin
+                // EP 仍先处理 Cfg/IO（不在 mem_resp 管辖）
+                if (cfg.role == XILINX_PCIE_EP &&
+                    t.kind inside {TLP_CFG_RD0, TLP_CFG_WR0, TLP_CFG_RD1, TLP_CFG_WR1,
+                                   TLP_IO_RD, TLP_IO_WR}) begin
+                    `uvm_info(get_type_name(),
+                        $sformatf("write() Cfg/IO: kind=%s, tag=0x%03h, payload=%0d bytes",
+                            t.kind.name(), t.tag, t.payload.size()),
+                        UVM_MEDIUM)
+                    handle_rx_tlp(t);
+                end else if (mem_resp != null) begin
+                    pcie_tl_cpl_tlp cpl;
+                    `uvm_info(get_type_name(),
+                        $sformatf("write() mem_resp: kind=%s, tag=0x%03h, payload=%0d bytes",
+                            t.kind.name(), t.tag, t.payload.size()),
+                        UVM_MEDIUM)
+                    cpl = mem_resp.handle_mem_request(t); // MWr→null；MRd/MRdLk/Atomic→CplD
+                    if (cpl != null) send_completion(cpl);
+                end
+            end else begin
+                // use_unified_mem=0：原稀疏内存路径（不变）
+                if (cfg.role == XILINX_PCIE_EP) begin
+                    `uvm_info(get_type_name(),
+                        $sformatf("write() 回调: kind=%s, tag=0x%03h, payload=%0d bytes",
+                            t.kind.name(), t.tag, t.payload.size()),
+                        UVM_MEDIUM)
+                    handle_rx_tlp(t);
+                end
             end
         end
     endfunction : write
@@ -452,8 +476,19 @@ class xilinx_pcie_agent extends uvm_agent;
                 check_completion_timeout();
             join_none
         end
+        // EP 自动响应队列（传统路径）
         if (cfg.role == XILINX_PCIE_EP) begin
             if (is_active == UVM_ACTIVE && cfg.ep_auto_response) begin
+                fork
+                    process_cpl_send_queue();
+                join_none
+            end
+        end
+        // 统一内存路径：use_unified_mem=1 时 RC/EP 都可能向 cpl_send_queue 推入
+        // completion（mem_resp 应答访存请求）；若队列处理器尚未启动则在此启动
+        if (cfg.use_unified_mem && is_active == UVM_ACTIVE) begin
+            // EP 且 ep_auto_response=1 时上面已经 fork 了，避免重复 fork
+            if (!(cfg.role == XILINX_PCIE_EP && cfg.ep_auto_response)) begin
                 fork
                     process_cpl_send_queue();
                 join_none
@@ -887,7 +922,7 @@ class xilinx_pcie_agent extends uvm_agent;
                 UVM_MEDIUM)
         end else begin
             `uvm_warning(get_type_name(),
-                "EP agent 处于 PASSIVE 模式，无法发送 Completion")
+                "agent 处于 PASSIVE 模式，无法发送 Completion")
         end
     endfunction : send_completion
 
