@@ -16,7 +16,7 @@
 ### 非目标(本轮不做)
 - 多 EP / switch 路由(后续独立 spec)。
 - 把 Config(Type0/Type1)搬到 AXIS TLP 通路 —— config 仍走 `cfg_mgmt` 侧带(`cfg_agent`),与本 feature 解耦。
-- 修改 `host_mem_manager` 自身(按依赖原样复用)。
+- 修改 `host_mem_manager` 业务逻辑(按依赖原样复用)。**例外(实现期发现,已批准)**:SV 禁止 package 引用 `$unit` 作用域类,故必须在 `host_mem_pkg` 内加一个最小抽象基类 `host_mem_api`(pure virtual `write_mem`/`read_mem`),`host_mem_manager extends host_mem_api`。向后兼容(仍 IS-A uvm_object),host_mem 自带 23-test tb 全过。本 feature 的 responder/agent 持 `host_mem_api` 句柄。已在 host_mem 仓提交(commit 8ef6b7f)。
 
 ---
 
