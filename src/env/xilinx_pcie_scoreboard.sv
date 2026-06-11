@@ -51,14 +51,17 @@ class xilinx_pcie_scoreboard extends uvm_scoreboard;
     //=========================================================================
     typedef bit [25:0] req_key_t;
 
-    // 未完成请求 map：记录等待 completion 的请求 TLP
-    pcie_tl_tlp                 outstanding_reqs[req_key_t];
+    // 未完成请求：per-key FIFO 队列。key={tag,requester_id} 在 tag 复用下可能
+    // 同时存在多笔同键请求（注册在 RC_TX/EP_TX，匹配在对侧 TX，时序可交错）。
+    // 用队列按注册顺序入队、匹配时弹出最旧，避免单条 map 被后注册者静默覆盖。
+    // 三个并行队列下标对齐：outstanding_reqs[key][i] 对应 bytes/expected 的 [key][i]。
+    pcie_tl_tlp                 outstanding_reqs[req_key_t][$];
 
-    // 已累计 completion 字节数
-    int                         outstanding_bytes[req_key_t];
+    // 已累计 completion 字节数（与 outstanding_reqs 队列下标对齐）
+    int                         outstanding_bytes[req_key_t][$];
 
-    // 期望总字节数
-    int                         expected_bytes[req_key_t];
+    // 期望总字节数（与 outstanding_reqs 队列下标对齐）
+    int                         expected_bytes[req_key_t][$];
 
     //=========================================================================
     // 检查 2：数据完整性
@@ -157,11 +160,11 @@ class xilinx_pcie_scoreboard extends uvm_scoreboard;
         // Completion 匹配检查
         if (cfg.scb_completion_check) begin
             if (cat == TLP_CAT_NON_POSTED) begin
-                // RC 发送 Non-Posted 请求 -> 注册 outstanding
+                // RC 发送 Non-Posted 请求 -> 入队 outstanding（FIFO，允许同键并存）
                 key = make_key(tlp.tag, tlp.requester_id);
-                outstanding_reqs[key]  = tlp;
-                outstanding_bytes[key] = 0;
-                expected_bytes[key]    = calc_expected_bytes(tlp);
+                outstanding_reqs[key].push_back(tlp);
+                outstanding_bytes[key].push_back(0);
+                expected_bytes[key].push_back(calc_expected_bytes(tlp));
                 total_requests++;
 
                 `uvm_info(get_type_name(),
@@ -230,11 +233,11 @@ class xilinx_pcie_scoreboard extends uvm_scoreboard;
                 // EP 发送 Completion -> 匹配 RC 的请求
                 match_completion(tlp, "EP_TX");
             end else if (cat == TLP_CAT_NON_POSTED) begin
-                // EP 发送 DMA Non-Posted 请求 -> 注册 outstanding
+                // EP 发送 DMA Non-Posted 请求 -> 入队 outstanding（FIFO，允许同键并存）
                 key = make_key(tlp.tag, tlp.requester_id);
-                outstanding_reqs[key]  = tlp;
-                outstanding_bytes[key] = 0;
-                expected_bytes[key]    = calc_expected_bytes(tlp);
+                outstanding_reqs[key].push_back(tlp);
+                outstanding_bytes[key].push_back(0);
+                expected_bytes[key].push_back(calc_expected_bytes(tlp));
                 total_requests++;
 
                 `uvm_info(get_type_name(),
@@ -292,22 +295,28 @@ class xilinx_pcie_scoreboard extends uvm_scoreboard;
         // 使用 completion 的 tag 和 requester_id 查找原始请求
         key = make_key(cpl.tag, cpl.requester_id);
 
-        if (outstanding_reqs.exists(key)) begin
-            // 累计 completion 字节数
-            outstanding_bytes[key] += cpl.payload.size();
+        if (outstanding_reqs.exists(key) && outstanding_reqs[key].size() > 0) begin
+            // 累计到队首（最旧）请求的 completion 字节数
+            outstanding_bytes[key][0] += cpl.payload.size();
 
             `uvm_info(get_type_name(),
                 $sformatf("[%s] Completion 匹配: tag=0x%03h, status=%s, 累计=%0d/%0d bytes",
                     source, cpl.tag, cpl.cpl_status.name(),
-                    outstanding_bytes[key], expected_bytes[key]),
+                    outstanding_bytes[key][0], expected_bytes[key][0]),
                 UVM_HIGH)
 
-            // 检查是否已完成全部字节传输
-            if (outstanding_bytes[key] >= expected_bytes[key]) begin
+            // 检查队首请求是否已完成全部字节传输
+            if (outstanding_bytes[key][0] >= expected_bytes[key][0]) begin
                 matched++;
-                outstanding_reqs.delete(key);
-                outstanding_bytes.delete(key);
-                expected_bytes.delete(key);
+                // 弹出队首（最旧）；队列空时删除整个 key 条目
+                void'(outstanding_reqs[key].pop_front());
+                void'(outstanding_bytes[key].pop_front());
+                void'(expected_bytes[key].pop_front());
+                if (outstanding_reqs[key].size() == 0) begin
+                    outstanding_reqs.delete(key);
+                    outstanding_bytes.delete(key);
+                    expected_bytes.delete(key);
+                end
 
                 `uvm_info(get_type_name(),
                     $sformatf("[%s] 请求完成: tag=0x%03h, req_id=0x%04h",
@@ -315,9 +324,11 @@ class xilinx_pcie_scoreboard extends uvm_scoreboard;
                     UVM_MEDIUM)
             end
         end else begin
-            // 未匹配到 outstanding 请求
+            // 未匹配到 outstanding 请求：升级为 error，杜绝静默假绿。
+            // per-key FIFO(#4)后正常流量不应再产生未匹配 completion；若出现，
+            // 必是真实异常（孤儿 completion / 协议错 / 复位区杂散包），需暴露。
             unexpected_cpl++;
-            `uvm_warning(get_type_name(),
+            `uvm_error(get_type_name(),
                 $sformatf("[%s] 未匹配的 Completion: tag=0x%03h, req_id=0x%04h, status=%s",
                     source, cpl.tag, cpl.requester_id, cpl.cpl_status.name()))
         end
@@ -383,15 +394,15 @@ class xilinx_pcie_scoreboard extends uvm_scoreboard;
         // 查找对应的原始请求以获取地址信息
         key = make_key(cpl.tag, cpl.requester_id);
 
-        if (outstanding_reqs.exists(key)) begin
+        if (outstanding_reqs.exists(key) && outstanding_reqs[key].size() > 0) begin
             pcie_tl_mem_tlp mem_req;
 
-            // 仅对 MRd 类型的 CplD 做数据比对
-            if ($cast(mem_req, outstanding_reqs[key])) begin
+            // 仅对 MRd 类型的 CplD 做数据比对（取队首最旧请求）
+            if ($cast(mem_req, outstanding_reqs[key][0])) begin
                 int offset;
 
                 // 计算本次 CplD 在整个请求中的字节偏移
-                offset = outstanding_bytes[key];
+                offset = outstanding_bytes[key][0];
 
                 // 逐字节比对
                 for (int i = 0; i < cpl.payload.size(); i++) begin
@@ -551,21 +562,27 @@ class xilinx_pcie_scoreboard extends uvm_scoreboard;
         `uvm_info(get_type_name(),
             "============================================================", UVM_LOW)
 
-        // 检查未完成的 outstanding 请求
+        // 检查未完成的 outstanding 请求（统计所有 key 下队列内的全部条目）
         if (outstanding_reqs.size() > 0) begin
             req_key_t key;
+            int leftover;
 
-            timed_out = outstanding_reqs.size();
+            leftover = 0;
+            foreach (outstanding_reqs[key])
+                leftover += outstanding_reqs[key].size();
+            timed_out = leftover;
 
             `uvm_error(get_type_name(),
-                $sformatf("仿真结束时仍有 %0d 个未完成请求:", outstanding_reqs.size()))
+                $sformatf("仿真结束时仍有 %0d 个未完成请求:", leftover))
 
             foreach (outstanding_reqs[key]) begin
-                `uvm_error(get_type_name(),
-                    $sformatf("  未完成: tag=0x%03h, req_id=0x%04h, kind=%s, 已收=%0d/%0d bytes",
-                        key[25:16], key[15:0],
-                        outstanding_reqs[key].kind.name(),
-                        outstanding_bytes[key], expected_bytes[key]))
+                foreach (outstanding_reqs[key][i]) begin
+                    `uvm_error(get_type_name(),
+                        $sformatf("  未完成: tag=0x%03h, req_id=0x%04h, kind=%s, 已收=%0d/%0d bytes",
+                            key[25:16], key[15:0],
+                            outstanding_reqs[key][i].kind.name(),
+                            outstanding_bytes[key][i], expected_bytes[key][i]))
+                end
             end
         end else begin
             `uvm_info(get_type_name(),

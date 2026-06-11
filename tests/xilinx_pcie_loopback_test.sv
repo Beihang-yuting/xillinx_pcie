@@ -103,6 +103,15 @@ class xilinx_pcie_loopback_test extends xilinx_pcie_base_test;
         // 500 笔事务：充分激励 Tag 池耗尽、FC credit 边界、completion 超时
         vseq.num_transactions = 500;
 
+        // payload 大小：256 字节。vseq 未做 randomize，rand 字段保持默认值，
+        // 必须显式赋值，否则 max_payload_bytes=0 导致阶段2退化为零长度 TLP。
+        vseq.max_payload_bytes = 256;
+
+        // 每对 MWr+MRd 之间等待 500ns，确保 completion 返回释放 tag。
+        // 混合背压下 CplD 往返 > 500ns，缺此间隔会使复用 tag 的请求在上一笔
+        // 同键 completion 匹配前重新注册，覆盖 scoreboard 条目导致 completion 失配。
+        vseq.inter_pair_gap_ns = 500;
+
         // 在 virtual sequencer 上启动序列（5 阶段全量执行）
         vseq.start(env.v_sqr);
 

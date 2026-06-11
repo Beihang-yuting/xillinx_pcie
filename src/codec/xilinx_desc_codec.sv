@@ -260,6 +260,16 @@ class xilinx_desc_codec;
             return '0;
         end
 
+        // #3 守卫：RC/CC 完成描述符按 PG213 Table 2-26/2-27 仅携带 tag[7:0]，
+        // 无 tag[9:8] 位置。当前 max_outstanding=256 已把 tag 压在 8 位内（恒 0xFF 以下），
+        // 截断为无操作。若有人调大 max_outstanding 启用扩展 tag(>0xFF)，此处立即报错，
+        // 避免完成路径静默丢失高 2 位导致 scoreboard 失配。
+        if (tlp.tag > 10'h0FF) begin
+            `uvm_error("XILINX_CODEC",
+                $sformatf("encode_rc: tag=0x%03h 超过 8 位，completion 描述符无法携带 tag[9:8]。请限制 max_outstanding<=256，或扩展完成路径以传递 tag[9:8]",
+                    tlp.tag))
+        end
+
         // 判断是否为锁定完成（Locked Completion：CPL_LK 或 CPLD_LK）
         locked = (tlp.kind == TLP_CPL_LK || tlp.kind == TLP_CPLD_LK);
 
@@ -470,6 +480,11 @@ class xilinx_desc_codec;
         // [120]     th：TLP 处理提示
         desc[120]     = tlp.th;
 
+        // [123:121] attr[2:0]：属性字段。PG213 CQ 描述符 attr 精确位本项目 spec 未标定，
+        //           此处置于保留区 [123:121]，与 decode_cq 对称读取，保证 BFM 内 attr
+        //           不在 CQ 路径丢失（修复前 encode/decode 均不处理 attr，恒丢为 0）。
+        desc[123:121] = tlp.attr;
+
         // [127]     td：TLP Digest 标志
         desc[127]     = tlp.td;
 
@@ -519,6 +534,9 @@ class xilinx_desc_codec;
 
         // [120]     th：处理提示
         tlp.th           = desc[120];
+
+        // [123:121] attr：与 encode_cq 对称回读（修复 CQ 路径 attr 丢失）
+        tlp.attr         = desc[123:121];
 
         // [127]     td：TLP Digest 标志
         tlp.td           = desc[127];
