@@ -4,6 +4,9 @@
 // 参考：Xilinx PG213 PCIe IP 接口规范
 //=============================================================================
 
+// 内存访问模式：PER_BUFFER=序列显式 alloc/free；PREMAP=env 预映射有界窗口
+typedef enum bit { XILINX_MEM_PER_BUFFER = 1'b0, XILINX_MEM_PREMAP = 1'b1 } xilinx_mem_access_mode_e;
+
 class xilinx_pcie_env_config extends uvm_object;
 
     `uvm_object_utils(xilinx_pcie_env_config)
@@ -218,6 +221,22 @@ class xilinx_pcie_env_config extends uvm_object;
     bit                         payload_alignment_check         = 1'b1;
     // Straddle 边界检查使能：验证 Straddle TLP 的 beat 边界对齐规则
     bit                         straddle_boundary_check         = 1'b1;
+
+    //-------------------------------------------------------------------------
+    // 参数组 15：统一内存接入（默认关，关时走原 sparse mem_space）
+    //-------------------------------------------------------------------------
+    // 统一内存总使能：0=沿用原 sparse mem_space；1=使用 host_mem_pkg 管理器
+    bit                          use_unified_mem  = 1'b0;
+    // 内存访问模式：PER_BUFFER=序列显式 alloc/free；PREMAP=env 预映射有界窗口
+    xilinx_mem_access_mode_e     mem_access_mode  = XILINX_MEM_PER_BUFFER;
+    // PREMAP 模式下预映射窗口的基地址
+    bit [63:0]                   premap_base      = 64'h0;
+    // PREMAP 模式下预映射窗口大小（字节），默认 16MB
+    int unsigned                 premap_size      = 32'h0100_0000; // 16MB（有界）
+    // 透传 host_mem：分配器算法（如 MODE_BUDDY）
+    alloc_mode_e                 mem_alloc_mode   = MODE_BUDDY;     // 透传 host_mem
+    // 透传 host_mem：最小分配粒度（字节）
+    int unsigned                 mem_granule      = 16;             // 透传 host_mem
 
     //=========================================================================
     // 构造函数
