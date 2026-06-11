@@ -42,6 +42,15 @@ class xilinx_pcie_virtual_sequencer extends uvm_sequencer;
     pcie_tl_ordering_engine ord_eng;
 
     //=========================================================================
+    // 统一内存句柄（use_unified_mem=1 时由 env 的 connect_phase 设置）
+    //=========================================================================
+
+    // RC 侧内存（抽象句柄）
+    host_mem_api host_mem;
+    // EP 侧内存
+    host_mem_api dev_mem;
+
+    //=========================================================================
     // 构造函数
     //=========================================================================
     function new(string name, uvm_component parent);

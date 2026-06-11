@@ -132,6 +132,16 @@ class xilinx_pcie_agent extends uvm_agent;
     int                             timeout_check_interval_ns = 1000;
 
     //=========================================================================
+    // 统一内存成员（use_unified_mem=1 时使用）
+    //=========================================================================
+
+    // 本实例内存（RC=host_mem, EP=dev_mem），从 config_db 获取
+    host_mem_api              mem;
+
+    // 内存应答器实例（wire 完成后用于下一步接入 RX 路径）
+    xilinx_pcie_mem_responder mem_resp;
+
+    //=========================================================================
     // EP 特有成员（仅 cfg.role==XILINX_PCIE_EP 时使用）
     //=========================================================================
 
@@ -293,6 +303,16 @@ class xilinx_pcie_agent extends uvm_agent;
         // 步骤 8：创建单一 RX analysis imp（RC/EP 共用，write() 内部 role 分发）
         // -----------------------------------------------------------------
         tlp_rx_imp = new("tlp_rx_imp", this);
+
+        // -----------------------------------------------------------------
+        // 步骤 9：统一内存句柄获取 + mem_responder 创建（门控）
+        // 仅在 use_unified_mem=1 时执行；默认 0 时完全跳过，行为无变化。
+        // -----------------------------------------------------------------
+        if (cfg.use_unified_mem) begin
+            if (!uvm_config_db#(host_mem_api)::get(this, "", "mem", mem))
+                `uvm_warning(get_type_name(), "use_unified_mem=1 但未拿到 mem 句柄")
+            mem_resp = new(mem, (cfg.role == XILINX_PCIE_EP) ? 16'h0100 : 16'h0000);
+        end
 
     endfunction : build_phase
 

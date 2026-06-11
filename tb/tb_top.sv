@@ -20,6 +20,7 @@
 `include "xilinx_pcie_params.svh"
 import uvm_pkg::*;
 import axis_pkg::*;
+import host_mem_pkg::*;
 import xilinx_pcie_pkg::*;
 
 module tb_top;
@@ -42,6 +43,13 @@ module tb_top;
     typedef virtual axis_if #(DATA_WIDTH,4,4,RC_TUSER_WIDTH,0,1,1) vif_rc_t;
     typedef virtual axis_if #(DATA_WIDTH,4,4,CQ_TUSER_WIDTH,0,1,1) vif_cq_t;
     typedef virtual axis_if #(DATA_WIDTH,4,4,CC_TUSER_WIDTH,0,1,1) vif_cc_t;
+
+    //=========================================================================
+    // 统一内存实例（$unit 作用域，以 host_mem_api 句柄注入 UVM config_db）
+    // 仅在 use_unified_mem=1 时被使用；默认不影响任何仿真行为
+    //=========================================================================
+    host_mem_manager host_mem_inst;
+    host_mem_manager dev_mem_inst;
 
     //=========================================================================
     // 时钟与复位
@@ -245,6 +253,13 @@ module tb_top;
             null, "uvm_test_top.env.ep_cfg_agent*", "cfg_vif", ep_cfg_if);
         uvm_config_db #(virtual xilinx_pcie_cfg_if)::set(
             null, "uvm_test_top.env.ep_int_agent*", "cfg_vif", ep_cfg_if);
+
+        // 统一内存：创建具体 host_mem_manager，以 host_mem_api 句柄传入 UVM
+        // use_unified_mem=0（默认）时 env/agent 不会调用这些句柄，行为无变化
+        host_mem_inst = new("host_mem");
+        dev_mem_inst  = new("dev_mem");
+        uvm_config_db#(host_mem_api)::set(null, "uvm_test_top.env", "host_mem", host_mem_inst);
+        uvm_config_db#(host_mem_api)::set(null, "uvm_test_top.env", "dev_mem",  dev_mem_inst);
 
         run_test();
     end
