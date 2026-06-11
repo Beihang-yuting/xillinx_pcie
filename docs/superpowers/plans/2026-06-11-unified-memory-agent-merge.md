@@ -31,8 +31,9 @@
 | `src/agent/xilinx_pcie_agent.sv` | (由 base_agent 改名+演进)唯一 role 参数化 agent,持 4×axis_agent/driver/monitor/共享mgr + 内存实例 + responder + 角色分支 |
 | `src/agent/xilinx_pcie_mem_responder.sv` | 共享 responder:收访存请求→访本地内存→发 CplD |
 | `src/env/xilinx_pcie_env_config.sv` | +use_unified_mem/mem_access_mode/premap_*/mem_alloc_mode/mem_granule + 枚举 |
-| `src/env/xilinx_pcie_env.sv` | 两同类 agent 实例 + 建/注入 host_mem/dev_mem + PREMAP 预分配 |
-| `src/env/xilinx_pcie_virtual_sequencer.sv` | 挂 host_mem/dev_mem 句柄 |
+| `tb/tb_top.sv` | 在 $unit 作用域创建 host_mem/dev_mem 具体实例,以 host_mem_api 句柄经 config_db 传入 env |
+| `src/env/xilinx_pcie_env.sv` | 两同类 agent 实例 + get host_mem/dev_mem 句柄 + init_region/PREMAP + 注入 agent |
+| `src/env/xilinx_pcie_virtual_sequencer.sv` | 挂 host_mem/dev_mem 句柄(host_mem_api) |
 | `src/seq/xilinx_pcie_dma_seq.sv` | use_unified_mem 时 alloc/free 模式 |
 | `src/xilinx_pcie_pkg.sv` | include 调整 + import host_mem_pkg |
 | `sim/filelist.f` | +host_mem 两文件 + incdir |
@@ -373,65 +374,87 @@ git commit -m "refactor(xilinx-pcie): rc/ep agent 合并入 role 参数化 xilin
 
 ---
 
-## Task 6: env 建 host_mem/dev_mem 实例并注入（use_unified_mem 门控）
+## Task 6: 建 host_mem/dev_mem 实例（tb_top）并注入（use_unified_mem 门控）
+
+> **重要(实现期发现):** env/agent/seq 都在 `xilinx_pcie_pkg` 内,SV 禁止 package 引用 `$unit` 作用域类 `host_mem_manager`,故**不能在 env 里 `host_mem_manager::type_id::create`**。改为:在 `tb/tb_top.sv`(`$unit`/module 作用域,可命名 `host_mem_manager`)创建两实例,经 config_db 以 **`host_mem_api`** 句柄类型传入;env/agent/seq/v_sqr 一律持 **`host_mem_api`** 句柄(完整方法集已暴露)。
 
 **Files:**
-- Modify: `src/env/xilinx_pcie_env.sv`
-- Modify: `src/env/xilinx_pcie_virtual_sequencer.sv`
-- Modify: `src/agent/xilinx_pcie_agent.sv`(接收注入的内存句柄)
+- Modify: `tb/tb_top.sv`(创建实例 + config_db set)
+- Modify: `src/env/xilinx_pcie_env.sv`(get 句柄 + init_region/PREMAP + 挂 v_sqr)
+- Modify: `src/env/xilinx_pcie_virtual_sequencer.sv`(host_mem_api 句柄)
+- Modify: `src/agent/xilinx_pcie_agent.sv`(host_mem_api 句柄 + responder 成员)
 
-- [ ] **Step 1: v_sqr 挂句柄**
+- [ ] **Step 1: v_sqr 挂句柄(host_mem_api 类型)**
 
 `xilinx_pcie_virtual_sequencer` 加:
 ```systemverilog
-    host_mem_manager host_mem;  // RC 侧内存
-    host_mem_manager dev_mem;   // EP 侧内存
+    host_mem_api host_mem;  // RC 侧内存（抽象句柄）
+    host_mem_api dev_mem;   // EP 侧内存
 ```
 
-- [ ] **Step 2: agent 持内存句柄 + responder 成员**
+- [ ] **Step 2: agent 持内存句柄(host_mem_api) + responder 成员**
 
 `xilinx_pcie_agent` 加成员:
 ```systemverilog
-    host_mem_manager          mem;       // 本实例内存（RC=host_mem, EP=dev_mem）
+    host_mem_api              mem;       // 本实例内存（RC=host_mem, EP=dev_mem）
     xilinx_pcie_mem_responder mem_resp;  // use_unified_mem 时实例化
 ```
 `build_phase`(use_unified_mem 时,get 到 mem 后):
 ```systemverilog
     if (cfg.use_unified_mem) begin
-        void'(uvm_config_db#(host_mem_manager)::get(this, "", "mem", mem));
-        mem_resp = new(mem, /*completer_id*/ {cfg.bus_num, cfg.dev_num, cfg.func_num});
+        void'(uvm_config_db#(host_mem_api)::get(this, "", "mem", mem));
+        mem_resp = new(mem, (cfg.role == XILINX_PCIE_EP) ? 16'h0100 : 16'h0000);
     end
 ```
-> completer_id 来源:用 env_config 现有 BDF 字段;若无则用常量(如 RC=16'h0000、EP=16'h0100)。执行时查 env_config 是否有 BDF 字段,无则加常量。
+注意:`xilinx_pcie_mem_responder` 的成员 `mem` 类型应为 `host_mem_api`(Task 3 已如此 —— 若 Task3 写成 host_mem_manager 需在本 Task 改为 host_mem_api)。completer_id 用常量(RC=16'h0000、EP=16'h0100);若 env_config 已有 BDF 字段则用之。
 
-- [ ] **Step 3: env 建实例 + 注入 + PREMAP 预分配**
+- [ ] **Step 3: tb_top 创建实例 + config_db set（host_mem_api 类型）**
 
-`xilinx_pcie_env`:加成员 `host_mem_manager host_mem, dev_mem;`。`build_phase`(use_unified_mem 时):
+`tb/tb_top.sv`(module 作用域可命名 host_mem_manager)。在 `run_test()` 之前的 initial 区(与现有 config_db set 同处):
+```systemverilog
+    // 统一内存：在 $unit 作用域创建具体 host_mem_manager，以 host_mem_api 句柄传入 UVM
+    host_mem_manager host_mem_inst;
+    host_mem_manager dev_mem_inst;
+    initial begin
+        host_mem_inst = new("host_mem");
+        dev_mem_inst  = new("dev_mem");
+        // 以抽象类型 set，env 端以 host_mem_api get（与 package 内代码兼容）
+        uvm_config_db#(host_mem_api)::set(null, "uvm_test_top.env", "host_mem", host_mem_inst);
+        uvm_config_db#(host_mem_api)::set(null, "uvm_test_top.env", "dev_mem",  dev_mem_inst);
+    end
+```
+> tb_top 顶部需可见 `host_mem_pkg`/`host_mem_manager`:tb_top 已 `import` 相关 pkg(确认有 `import host_mem_pkg::*;`;host_mem_manager 经 filelist 在 $unit 编译,tb_top 直接可名)。若 tb_top 未 import,补 `import host_mem_pkg::*;`。
+
+- [ ] **Step 4: env get 句柄 + init_region/PREMAP + 挂 v_sqr**
+
+`xilinx_pcie_env` 加成员 `host_mem_api host_mem, dev_mem;`。`build_phase`(use_unified_mem 时):
 ```systemverilog
     if (cfg.use_unified_mem) begin
-        host_mem = host_mem_manager::type_id::create("host_mem");
-        dev_mem  = host_mem_manager::type_id::create("dev_mem");
+        if (!uvm_config_db#(host_mem_api)::get(this, "", "host_mem", host_mem))
+            `uvm_fatal(get_type_name(), "use_unified_mem=1 但未从 tb 拿到 host_mem 句柄")
+        if (!uvm_config_db#(host_mem_api)::get(this, "", "dev_mem", dev_mem))
+            `uvm_fatal(get_type_name(), "use_unified_mem=1 但未从 tb 拿到 dev_mem 句柄")
         host_mem.init_region(64'h0, 64'hFFFF_FFFF, cfg.mem_alloc_mode, cfg.mem_granule);
         dev_mem.init_region (64'h0, 64'hFFFF_FFFF, cfg.mem_alloc_mode, cfg.mem_granule);
         if (cfg.mem_access_mode == XILINX_MEM_PREMAP) begin
             void'(host_mem.alloc(cfg.premap_size, cfg.mem_granule));
             void'(dev_mem.alloc (cfg.premap_size, cfg.mem_granule));
         end
-        uvm_config_db#(host_mem_manager)::set(this, "rc_agent*", "mem", host_mem);
-        uvm_config_db#(host_mem_manager)::set(this, "ep_agent*", "mem", dev_mem);
+        uvm_config_db#(host_mem_api)::set(this, "rc_agent*", "mem", host_mem);
+        uvm_config_db#(host_mem_api)::set(this, "ep_agent*", "mem", dev_mem);
     end
 ```
 `connect_phase`(use_unified_mem 时):`v_sqr.host_mem = host_mem; v_sqr.dev_mem = dev_mem;`
-> `init_region(0, 0xFFFF_FFFF)` 仅建 free 结构,不开销密集内存;真正密集分配在 alloc()。
+> `init_region(0, 0xFFFF_FFFF)` 仅建 free 结构,不开销密集内存;密集分配在 alloc()。
 
-- [ ] **Step 4: 验证编译 + 回归(默认关，行为不变)**
+- [ ] **Step 5: 验证编译 + 回归(默认关，行为不变)**
 
-同步,远程 `make compile` + sanity + loopback。Expected: 全绿同基线(开关默认关,responder/mem 未启用)。
+同步(含 tb_top.sv),远程 `make compile` + sanity + loopback。Expected: 全绿同基线(开关默认关,responder/mem 未启用)。
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 ```bash
 git add -A
-git commit -m "feat(xilinx-pcie): env 建 host_mem/dev_mem 双实例并经 config_db 注入（门控）"
+git commit -m "feat(xilinx-pcie): tb_top 建 host_mem/dev_mem 实例，env 经 host_mem_api 注入（门控）"
 ```
 
 ---
@@ -485,7 +508,7 @@ git commit -m "feat(xilinx-pcie): agent 在 use_unified_mem 时经 mem_responder
 
 - [ ] **Step 1: seq 在 use_unified_mem 时 alloc 目标地址**
 
-dma_seq 加字段 `host_mem_manager target_mem;`(由上层 vseq 赋值:EP 发起→对端是 host,赋 `v_sqr.host_mem`)。body:
+dma_seq 加字段 `host_mem_api target_mem;`(由上层 vseq 赋值:EP 发起→对端是 host,赋 `v_sqr.host_mem`)。body:
 ```systemverilog
     if (cfg.use_unified_mem && target_mem != null) begin
         host_addr = target_mem.alloc(total_length, 64);
