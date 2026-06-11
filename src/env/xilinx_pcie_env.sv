@@ -28,11 +28,11 @@ class xilinx_pcie_env extends uvm_env;
     // 子组件
     //=========================================================================
 
-    // RC Agent：Root Complex 特化 agent
-    xilinx_pcie_rc_agent                rc_agent;
+    // RC Agent：Root Complex role agent（role 由 cfg.role=XILINX_PCIE_RC 设置）
+    xilinx_pcie_agent                   rc_agent;
 
-    // EP Agent：Endpoint 特化 agent
-    xilinx_pcie_ep_agent                ep_agent;
+    // EP Agent：Endpoint role agent（role 由 cfg.role=XILINX_PCIE_EP 设置）
+    xilinx_pcie_agent                   ep_agent;
 
     // RC 侧中断 Agent（cfg_interrupt 驱动/监控）
     xilinx_pcie_interrupt_agent         rc_int_agent;
@@ -105,8 +105,8 @@ class xilinx_pcie_env extends uvm_env;
         // -----------------------------------------------------------------
         // 步骤 4：创建 RC 和 EP agent
         // -----------------------------------------------------------------
-        rc_agent = xilinx_pcie_rc_agent::type_id::create("rc_agent", this);
-        ep_agent = xilinx_pcie_ep_agent::type_id::create("ep_agent", this);
+        rc_agent = xilinx_pcie_agent::type_id::create("rc_agent", this);
+        ep_agent = xilinx_pcie_agent::type_id::create("ep_agent", this);
 
         // -----------------------------------------------------------------
         // 步骤 4b：若中断使能，创建 RC/EP 侧中断 Agent
