@@ -2,7 +2,7 @@
 // Xilinx PCIe TL-Layer BFM - EP Agent（Endpoint 特化）
 // 基于 Xilinx PG213 PCIe IP 接口规范
 //
-// 功能：继承 xilinx_pcie_base_agent，添加 EP 特有功能：
+// 功能：继承 xilinx_pcie_agent，添加 EP 特有功能：
 //   1. 自动回复模式：订阅 monitor 的 tlp_rx_ap，自动处理 MRd/MWr/IO/Cfg 请求
 //   2. 内存模型：稀疏关联数组模拟 EP 本地内存
 //   3. DMA 发起：通过 sequencer 主动发送 MRd/MWr TLP
@@ -31,7 +31,7 @@ class tlp_oneshot_seq extends uvm_sequence #(pcie_tl_tlp);
 
 endclass : tlp_oneshot_seq
 
-class xilinx_pcie_ep_agent extends xilinx_pcie_base_agent;
+class xilinx_pcie_ep_agent extends xilinx_pcie_agent;
 
     // 声明 analysis_imp，用于订阅 monitor 的 tlp_rx_ap 实现自动响应
     `uvm_component_utils(xilinx_pcie_ep_agent)

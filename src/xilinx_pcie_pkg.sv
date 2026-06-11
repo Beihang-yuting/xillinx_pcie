@@ -55,7 +55,7 @@ package xilinx_pcie_pkg;
     `include "agent/xilinx_pcie_monitor.sv"
 
     // 基础 Agent：组合 4 个 axis_agent、driver、monitor 及 TL 层共享管理器
-    `include "agent/xilinx_pcie_base_agent.sv"
+    `include "agent/xilinx_pcie_agent.sv"
 
     // RC Agent：Root Complex 特化，支持 Completion 超时追踪和 BAR 地址分配
     `include "agent/xilinx_pcie_rc_agent.sv"

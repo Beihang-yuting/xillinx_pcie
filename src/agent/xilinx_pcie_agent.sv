@@ -9,9 +9,9 @@
 // 子类：xilinx_pcie_rc_agent（RC 特化）、xilinx_pcie_ep_agent（EP 特化）
 //=============================================================================
 
-class xilinx_pcie_base_agent extends uvm_agent;
+class xilinx_pcie_agent extends uvm_agent;
 
-    `uvm_component_utils(xilinx_pcie_base_agent)
+    `uvm_component_utils(xilinx_pcie_agent)
 
     //=========================================================================
     // 环境配置
@@ -295,4 +295,4 @@ class xilinx_pcie_base_agent extends uvm_agent;
 
     endfunction : connect_phase
 
-endclass : xilinx_pcie_base_agent
+endclass : xilinx_pcie_agent

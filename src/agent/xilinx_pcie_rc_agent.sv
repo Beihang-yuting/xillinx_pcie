@@ -2,13 +2,13 @@
 // Xilinx PCIe TL-Layer BFM - RC Agent（Root Complex 特化）
 // 基于 Xilinx PG213 PCIe IP 接口规范
 //
-// 功能：继承 xilinx_pcie_base_agent，添加 RC 特有功能：
+// 功能：继承 xilinx_pcie_agent，添加 RC 特有功能：
 //   1. Completion 超时追踪：监控 Non-Posted 请求的 completion 是否超时
 //   2. BAR 地址分配：为 EP 分配 BAR 基地址（RC 枚举功能）
 //   3. 订阅 monitor 的 tlp_rx_ap 以追踪 completion 匹配
 //=============================================================================
 
-class xilinx_pcie_rc_agent extends xilinx_pcie_base_agent;
+class xilinx_pcie_rc_agent extends xilinx_pcie_agent;
 
     `uvm_component_utils(xilinx_pcie_rc_agent)
 
