@@ -45,6 +45,9 @@ package xilinx_pcie_pkg;
     // 通道路由器：根据 BFM 角色和 TLP 类别决定使用哪个 AXI-Stream 通道（TX/RX）
     `include "agent/xilinx_pcie_channel_router.sv"
 
+    // 共享内存应答器（被统一 agent 复用）
+    `include "agent/xilinx_pcie_mem_responder.sv"
+
     // PCIe TLP Driver：将 pcie_tl_tlp 编码为 AXI-Stream beat 序列并发送（11 步流水线）
     `include "agent/xilinx_pcie_driver.sv"
 
