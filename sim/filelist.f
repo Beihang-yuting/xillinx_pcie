@@ -9,6 +9,13 @@
 -f /home/ubuntu/ryan/axis_work/axis_vip/sim/filelist_lib.f
 
 //-----------------------------------------------------------------------------
+// 1b. Host Memory Manager（shm_work/host_mem）：统一内存模型
+//-----------------------------------------------------------------------------
++incdir+/home/ubuntu/ryan/shm_work/host_mem/src
+/home/ubuntu/ryan/shm_work/host_mem/src/host_mem_pkg.sv
+/home/ubuntu/ryan/shm_work/host_mem/src/host_mem_manager.sv
+
+//-----------------------------------------------------------------------------
 // 2. PCIe TL VIP（pcie_work）：头文件搜索路径 + 源文件
 //-----------------------------------------------------------------------------
 

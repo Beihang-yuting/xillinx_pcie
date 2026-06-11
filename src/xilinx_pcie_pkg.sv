@@ -14,6 +14,9 @@ package xilinx_pcie_pkg;
     // 导入 PCIe TL VIP package（提供 pcie_tl_tlp、pcie_tl_pkg 中所有类型）
     import pcie_tl_pkg::*;
 
+    // 导入 Host Memory Manager package（host_mem_manager 类）
+    import host_mem_pkg::*;
+
     // 编译期宽度宏 (DATA_WIDTH/KEEP_WIDTH/4 通道 TUSER 宽度)
     // 由 +define+DATA_WIDTH=N 驱动, 默认 256
     `include "xilinx_pcie_params.svh"
