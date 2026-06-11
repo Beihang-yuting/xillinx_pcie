@@ -77,6 +77,11 @@ class xilinx_pcie_driver extends uvm_driver #(pcie_tl_tlp);
     // TLP 发送分析端口：每成功发送一个 TLP 后广播
     uvm_analysis_port #(pcie_tl_tlp) tlp_tx_ap;
 
+    // 本 agent 的 requester_id（BDF），用于在 TLP 中打上发送方标记
+    // 由 agent.connect_phase 设置：RC=0x0000, EP=0x0100
+    // 使 write() 回调能区分"本 agent 自发"与"对端发来"的 TLP
+    bit [15:0] own_requester_id = 16'h0000;
+
     //=========================================================================
     // 构造函数
     //=========================================================================
@@ -103,6 +108,15 @@ class xilinx_pcie_driver extends uvm_driver #(pcie_tl_tlp);
             // 步骤 1：从 sequencer 获取下一个 TLP 事务
             // -----------------------------------------------------------------
             seq_item_port.get_next_item(tlp);
+
+            // -----------------------------------------------------------------
+            // 步骤 1b：打上发送方 requester_id（BDF），使监控回调能区分
+            // 本 agent 自发的 TLP 与从对端收到的 TLP
+            // 仅对请求类 TLP（非 Completion）且未设置 requester_id 时才打标
+            // -----------------------------------------------------------------
+            if (tlp.requester_id == 16'h0000 &&
+                !(tlp.kind inside {TLP_CPL, TLP_CPLD, TLP_CPL_LK, TLP_CPLD_LK}))
+                tlp.requester_id = own_requester_id;
 
             // -----------------------------------------------------------------
             // 步骤 2：可选 Tag 分配（仅 Non-Posted 请求需要）

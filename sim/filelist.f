@@ -73,3 +73,4 @@
 /home/ubuntu/ryan/xilinx_pcie/tests/xilinx_pcie_loopback_test.sv
 /home/ubuntu/ryan/xilinx_pcie/tests/xilinx_pcie_stress_test.sv
 /home/ubuntu/ryan/xilinx_pcie/tests/xilinx_pcie_mega_stress_test.sv
+/home/ubuntu/ryan/xilinx_pcie/tests/xilinx_pcie_unified_mem_test.sv

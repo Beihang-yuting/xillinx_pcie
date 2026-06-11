@@ -96,4 +96,7 @@ package xilinx_pcie_pkg;
     // 序列库：超大规模压力测试虚拟序列（20000+ 报文，多轮混合 payload）
     `include "seq/xilinx_pcie_mega_stress_vseq.sv"
 
+    // 序列库：统一内存双向往返验证序列（Phase A/B dev_mem+host_mem roundtrip，Phase C leak_check）
+    `include "seq/xilinx_pcie_unified_mem_vseq.sv"
+
 endpackage : xilinx_pcie_pkg

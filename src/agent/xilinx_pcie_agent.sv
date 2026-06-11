@@ -208,6 +208,15 @@ class xilinx_pcie_agent extends uvm_agent;
         // 同步 is_active 设置
         is_active = cfg.is_active;
 
+        // 根据 role 设置 completer_id（BDF）：RC=0x0000, EP=0x0100
+        // 这个字段用于：① generate_completion() 中填充 completer_id 字段
+        //               ② 驱动器 own_requester_id（在 connect_phase 中传递）
+        //               ③ write() 回调中识别自发 TLP
+        if (cfg.role == XILINX_PCIE_RC)
+            completer_id = 16'h0000;
+        else
+            completer_id = 16'h0100;
+
         // -----------------------------------------------------------------
         // 步骤 2：创建编解码器和路由器
         // -----------------------------------------------------------------
@@ -362,12 +371,14 @@ class xilinx_pcie_agent extends uvm_agent;
             driver.seq_item_port.connect(sequencer.seq_item_export);
 
             // 设置 driver 的引用：编解码器、路由器、管理器
-            driver.tuser_codec  = this.tuser_codec;
-            driver.straddle_eng = this.straddle_eng;
-            driver.router       = this.router;
-            driver.tag_mgr      = this.tag_mgr;
-            driver.fc_mgr       = this.fc_mgr;
-            driver.cfg          = this.cfg;
+            driver.tuser_codec       = this.tuser_codec;
+            driver.straddle_eng      = this.straddle_eng;
+            driver.router            = this.router;
+            driver.tag_mgr           = this.tag_mgr;
+            driver.fc_mgr            = this.fc_mgr;
+            driver.cfg               = this.cfg;
+            // 告知 driver 本 agent 的 BDF，用于在 TLP 中打上 requester_id
+            driver.own_requester_id  = this.completer_id;
 
             // 将 4 个 axis_agent 的 sequencer 引用设置到 driver
             // 注意：axis_agent.sqr 仅在 UVM_ACTIVE 且非 MONITOR_ONLY 时创建
@@ -436,8 +447,17 @@ class xilinx_pcie_agent extends uvm_agent;
         end else begin
             // 非 Completion 包（请求类）
             if (cfg.use_unified_mem) begin
+                // 过滤：跳过本 agent 自发的 TLP
+                // requester_id==completer_id 说明是本 agent 从自己 sequencer 发出的 TLP，
+                // 回环 monitor 让发送方也能看到自己的 TLP，不能响应自己。
+                if (t.requester_id == this.completer_id) begin
+                    `uvm_info(get_type_name(),
+                        $sformatf("write() 跳过自发 TLP: kind=%s req_id=0x%04h",
+                            t.kind.name(), t.requester_id),
+                        UVM_HIGH)
+                end
                 // EP 仍先处理 Cfg/IO（不在 mem_resp 管辖）
-                if (cfg.role == XILINX_PCIE_EP &&
+                else if (cfg.role == XILINX_PCIE_EP &&
                     t.kind inside {TLP_CFG_RD0, TLP_CFG_WR0, TLP_CFG_RD1, TLP_CFG_WR1,
                                    TLP_IO_RD, TLP_IO_WR}) begin
                     `uvm_info(get_type_name(),
