@@ -33,7 +33,7 @@ class xilinx_pcie_unified_mem_test extends xilinx_pcie_base_test;
 
         cfg.use_unified_mem      = 1'b1;
         cfg.mem_access_mode      = XILINX_MEM_PER_BUFFER;
-        cfg.mem_alloc_mode       = MODE_LINEAR;  // 避免 buddy addr_to_level(4GB) 32-bit 截断 bug
+        cfg.mem_alloc_mode       = MODE_BUDDY;   // buddy 32-bit 溢出已修复，可使用 buddy 模式
         cfg.scb_enable           = 1'b1;
         cfg.scb_completion_check = 1'b1;
         cfg.scb_data_integrity   = 1'b1;
