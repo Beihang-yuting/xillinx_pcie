@@ -14,6 +14,19 @@ package xilinx_pcie_pkg;
     // 导入 PCIe TL VIP package（提供 pcie_tl_tlp、pcie_tl_pkg 中所有类型）
     import pcie_tl_pkg::*;
 
+    // 导入 Host Memory Manager package（host_mem_manager 类）
+    import host_mem_pkg::*;
+
+    // 编译期宽度宏 (DATA_WIDTH/KEEP_WIDTH/4 通道 TUSER 宽度)
+    // 由 +define+DATA_WIDTH=N 驱动, 默认 256
+    `include "xilinx_pcie_params.svh"
+
+    // ---- Per-channel parameterized axis_agent typedefs (PG213 真实宽度) ----
+    typedef axis_agent#(`XILINX_DATA_W,4,4,`XILINX_RQ_TUSER_W,0,1,1) axis_agent_rq_t;
+    typedef axis_agent#(`XILINX_DATA_W,4,4,`XILINX_RC_TUSER_W,0,1,1) axis_agent_rc_t;
+    typedef axis_agent#(`XILINX_DATA_W,4,4,`XILINX_CQ_TUSER_W,0,1,1) axis_agent_cq_t;
+    typedef axis_agent#(`XILINX_DATA_W,4,4,`XILINX_CC_TUSER_W,0,1,1) axis_agent_cc_t;
+
     // 包含本项目类型定义（枚举、结构体、helper 类、函数）
     `include "xilinx_pcie_types.sv"
 
@@ -32,20 +45,17 @@ package xilinx_pcie_pkg;
     // 通道路由器：根据 BFM 角色和 TLP 类别决定使用哪个 AXI-Stream 通道（TX/RX）
     `include "agent/xilinx_pcie_channel_router.sv"
 
+    // 共享内存应答器（被统一 agent 复用）
+    `include "agent/xilinx_pcie_mem_responder.sv"
+
     // PCIe TLP Driver：将 pcie_tl_tlp 编码为 AXI-Stream beat 序列并发送（11 步流水线）
     `include "agent/xilinx_pcie_driver.sv"
 
     // PCIe TLP Monitor：监听 4 个 axis_agent 输出，将 AXI-Stream 包解码回 pcie_tl_tlp
     `include "agent/xilinx_pcie_monitor.sv"
 
-    // 基础 Agent：组合 4 个 axis_agent、driver、monitor 及 TL 层共享管理器
-    `include "agent/xilinx_pcie_base_agent.sv"
-
-    // RC Agent：Root Complex 特化，支持 Completion 超时追踪和 BAR 地址分配
-    `include "agent/xilinx_pcie_rc_agent.sv"
-
-    // EP Agent：Endpoint 特化，支持自动回复、内存模型和 DMA 发起
-    `include "agent/xilinx_pcie_ep_agent.sv"
+    // 统一 Agent：role 参数化，整合 RC/EP 特有功能（completion 超时、BAR 分配、自动响应、DMA）
+    `include "agent/xilinx_pcie_agent.sv"
 
     // cfg_mgmt 边带接口驱动/监控 Agent（EP 提供 cfg_read/write task，RC 自动响应）
     `include "cfg/xilinx_pcie_cfg_agent.sv"
@@ -85,5 +95,11 @@ package xilinx_pcie_pkg;
 
     // 序列库：超大规模压力测试虚拟序列（20000+ 报文，多轮混合 payload）
     `include "seq/xilinx_pcie_mega_stress_vseq.sv"
+
+    // 序列库：原子操作序列（FetchAdd/Swap/CAS，驱动 pcie_tl_atomic_tlp 到对端）
+    `include "seq/xilinx_pcie_atomic_seq.sv"
+
+    // 序列库：统一内存双向往返验证序列（Phase A/B dev_mem+host_mem roundtrip，Phase D atomic，Phase C leak_check）
+    `include "seq/xilinx_pcie_unified_mem_vseq.sv"
 
 endpackage : xilinx_pcie_pkg

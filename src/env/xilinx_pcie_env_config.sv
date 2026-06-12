@@ -4,6 +4,9 @@
 // 参考：Xilinx PG213 PCIe IP 接口规范
 //=============================================================================
 
+// 内存访问模式：PER_BUFFER=序列显式 alloc/free；PREMAP=env 预映射有界窗口
+typedef enum bit { XILINX_MEM_PER_BUFFER = 1'b0, XILINX_MEM_PREMAP = 1'b1 } xilinx_mem_access_mode_e;
+
 class xilinx_pcie_env_config extends uvm_object;
 
     `uvm_object_utils(xilinx_pcie_env_config)
@@ -22,7 +25,8 @@ class xilinx_pcie_env_config extends uvm_object;
     // 支持 64 / 128 / 256 / 512 位，必须与 Xilinx PCIe IP 配置一致
     //-------------------------------------------------------------------------
     // AXI-Stream tdata 数据位宽（单位：bit）
-    int                         DATA_WIDTH  = 256;
+    // 默认继承编译期宏 XILINX_DATA_W (由 +define+DATA_WIDTH=N 驱动)
+    int                         DATA_WIDTH  = `XILINX_DATA_W;
 
     //-------------------------------------------------------------------------
     // 参数组 3：Straddle 模式
@@ -218,6 +222,22 @@ class xilinx_pcie_env_config extends uvm_object;
     // Straddle 边界检查使能：验证 Straddle TLP 的 beat 边界对齐规则
     bit                         straddle_boundary_check         = 1'b1;
 
+    //-------------------------------------------------------------------------
+    // 参数组 15：统一内存接入（默认关，关时走原 sparse mem_space）
+    //-------------------------------------------------------------------------
+    // 统一内存总使能：0=沿用原 sparse mem_space；1=使用 host_mem_pkg 管理器
+    bit                          use_unified_mem  = 1'b0;
+    // 内存访问模式：PER_BUFFER=序列显式 alloc/free；PREMAP=env 预映射有界窗口
+    xilinx_mem_access_mode_e     mem_access_mode  = XILINX_MEM_PER_BUFFER;
+    // PREMAP 模式下预映射窗口的基地址
+    bit [63:0]                   premap_base      = 64'h0;
+    // PREMAP 模式下预映射窗口大小（字节），默认 16MB
+    int unsigned                 premap_size      = 32'h0100_0000; // 16MB（有界）
+    // 透传 host_mem：分配器算法（如 MODE_BUDDY）
+    alloc_mode_e                 mem_alloc_mode   = MODE_BUDDY;     // 透传 host_mem
+    // 透传 host_mem：最小分配粒度（字节）
+    int unsigned                 mem_granule      = 16;             // 透传 host_mem
+
     //=========================================================================
     // 构造函数
     //=========================================================================
@@ -290,6 +310,123 @@ class xilinx_pcie_env_config extends uvm_object;
     function int get_cc_tuser_width();
         return xilinx_get_cc_tuser_width(DATA_WIDTH);
     endfunction : get_cc_tuser_width
+
+    //=========================================================================
+    // do_copy：深拷贝全部字段，修正 clone() 丢字段问题
+    // env 用 cfg.clone() 分别构造 rc_cfg / ep_cfg，必须复制所有字段，
+    // 否则 test 设置的值（如 use_unified_mem、per_channel_bw_config 等）
+    // 在 agent 端会回退成默认值。
+    //=========================================================================
+    virtual function void do_copy(uvm_object rhs);
+        xilinx_pcie_env_config o;
+        super.do_copy(rhs);
+        if (!$cast(o, rhs)) return;
+
+        // 参数组 1：角色与激活模式
+        this.role                       = o.role;
+        this.is_active                  = o.is_active;
+
+        // 参数组 2：AXI-Stream 数据位宽
+        this.DATA_WIDTH                 = o.DATA_WIDTH;
+
+        // 参数组 3：Straddle 模式
+        this.straddle_enable            = o.straddle_enable;
+
+        // 参数组 4：PCIe 链路能力参数
+        this.max_payload_size           = o.max_payload_size;
+        this.max_read_request_size      = o.max_read_request_size;
+        this.read_completion_boundary   = o.read_completion_boundary;
+        this.link_speed                 = o.link_speed;
+        this.link_width                 = o.link_width;
+
+        // 参数组 5：Tag 管理参数
+        this.extended_tag_enable        = o.extended_tag_enable;
+        this.max_outstanding            = o.max_outstanding;
+
+        // 参数组 6：流量控制参数
+        this.fc_enable                  = o.fc_enable;
+        this.infinite_credit            = o.infinite_credit;
+        this.init_ph_credit             = o.init_ph_credit;
+        this.init_pd_credit             = o.init_pd_credit;
+        this.init_nph_credit            = o.init_nph_credit;
+        this.init_npd_credit            = o.init_npd_credit;
+        this.init_cplh_credit           = o.init_cplh_credit;
+        this.init_cpld_credit           = o.init_cpld_credit;
+
+        // 参数组 7：排序参数
+        this.relaxed_ordering_enable    = o.relaxed_ordering_enable;
+        this.id_based_ordering_enable   = o.id_based_ordering_enable;
+        this.bypass_ordering            = o.bypass_ordering;
+
+        // 参数组 8：配置空间参数
+        this.cfg_enable                 = o.cfg_enable;
+        this.vendor_id                  = o.vendor_id;
+        this.device_id                  = o.device_id;
+        this.class_code                 = o.class_code;
+        this.subsys_vendor_id           = o.subsys_vendor_id;
+        this.subsys_device_id           = o.subsys_device_id;
+        foreach (o.bar_cfg[i]) this.bar_cfg[i] = o.bar_cfg[i];
+
+        // 参数组 9：中断参数
+        this.interrupt_enable           = o.interrupt_enable;
+        this.interrupt_mode             = o.interrupt_mode;
+        this.msi_vector_count           = o.msi_vector_count;
+        this.msix_table_size            = o.msix_table_size;
+        this.msix_table_bar             = o.msix_table_bar;
+        this.msix_table_offset          = o.msix_table_offset;
+        this.msix_pba_bar               = o.msix_pba_bar;
+        this.msix_pba_offset            = o.msix_pba_offset;
+
+        // 参数组 10：AXI-Stream 带宽控制参数
+        this.tx_valid_mode              = o.tx_valid_mode;
+        this.rx_ready_mode              = o.rx_ready_mode;
+        this.tx_idle_cycles             = o.tx_idle_cycles;
+        this.tx_valid_weight            = o.tx_valid_weight;
+        this.rx_ready_weight            = o.rx_ready_weight;
+        this.per_channel_bw_config      = o.per_channel_bw_config;
+        foreach (o.channel_bw_cfg[i]) this.channel_bw_cfg[i] = o.channel_bw_cfg[i];
+
+        // 参数组 11：EP 自动响应参数
+        this.ep_auto_response           = o.ep_auto_response;
+        this.response_delay_min         = o.response_delay_min;
+        this.response_delay_max         = o.response_delay_max;
+        this.mem_size                   = o.mem_size;
+
+        // 参数组 12：超时参数
+        this.cpl_timeout_ns             = o.cpl_timeout_ns;
+
+        // 参数组 13：Scoreboard 与功能覆盖率开关
+        this.scb_enable                 = o.scb_enable;
+        this.scb_completion_check       = o.scb_completion_check;
+        this.scb_data_integrity         = o.scb_data_integrity;
+        this.scb_ordering_check         = o.scb_ordering_check;
+        this.scb_descriptor_check       = o.scb_descriptor_check;
+        this.cov_enable                 = o.cov_enable;
+        this.cov_tlp_type               = o.cov_tlp_type;
+        this.cov_descriptor             = o.cov_descriptor;
+        this.cov_tuser                  = o.cov_tuser;
+        this.cov_straddle               = o.cov_straddle;
+        this.cov_channel                = o.cov_channel;
+        this.cov_fc                     = o.cov_fc;
+
+        // 参数组 14：协议检查开关
+        this.rq_protocol_check_enable   = o.rq_protocol_check_enable;
+        this.rc_protocol_check_enable   = o.rc_protocol_check_enable;
+        this.cq_protocol_check_enable   = o.cq_protocol_check_enable;
+        this.cc_protocol_check_enable   = o.cc_protocol_check_enable;
+        this.desc_format_check_enable   = o.desc_format_check_enable;
+        this.tuser_consistency_check    = o.tuser_consistency_check;
+        this.payload_alignment_check    = o.payload_alignment_check;
+        this.straddle_boundary_check    = o.straddle_boundary_check;
+
+        // 参数组 15：统一内存接入
+        this.use_unified_mem            = o.use_unified_mem;
+        this.mem_access_mode            = o.mem_access_mode;
+        this.premap_base                = o.premap_base;
+        this.premap_size                = o.premap_size;
+        this.mem_alloc_mode             = o.mem_alloc_mode;
+        this.mem_granule                = o.mem_granule;
+    endfunction : do_copy
 
     //=========================================================================
     // 参数合法性验证

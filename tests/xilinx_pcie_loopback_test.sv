@@ -103,8 +103,33 @@ class xilinx_pcie_loopback_test extends xilinx_pcie_base_test;
         // 500 笔事务：充分激励 Tag 池耗尽、FC credit 边界、completion 超时
         vseq.num_transactions = 500;
 
+        // payload 大小：256 字节。vseq 未做 randomize，rand 字段保持默认值，
+        // 必须显式赋值，否则 max_payload_bytes=0 导致阶段2退化为零长度 TLP。
+        vseq.max_payload_bytes = 256;
+
+        // 每对 MWr+MRd 之间等待 500ns，确保 completion 返回释放 tag。
+        // 混合背压下 CplD 往返 > 500ns，缺此间隔会使复用 tag 的请求在上一笔
+        // 同键 completion 匹配前重新注册，覆盖 scoreboard 条目导致 completion 失配。
+        vseq.inter_pair_gap_ns = 500;
+
         // 在 virtual sequencer 上启动序列（5 阶段全量执行）
         vseq.start(env.v_sqr);
+
+        `uvm_info(get_type_name(), "===== Loopback 序列完成，等待在途 Completion 排空 =====", UVM_LOW)
+
+        // drain：最后一批 MEM_RD（含 4096B 大读）的 CplD 仍在途中。轮询
+        // scoreboard 在途请求清零再撤销 objection；500us 上限防止真实挂死时死等。
+        begin
+            int unsigned drain_us = 0;
+            while (env.scb != null && env.scb.outstanding_reqs.size() > 0 &&
+                   drain_us < 500) begin
+                #1us;
+                drain_us++;
+            end
+            if (env.scb != null && env.scb.outstanding_reqs.size() > 0)
+                `uvm_warning(get_type_name(),
+                    $sformatf("drain 超时：仍有 %0d 笔在途请求", env.scb.outstanding_reqs.size()))
+        end
 
         `uvm_info(get_type_name(), "===== Loopback Stress Test 完成 =====", UVM_LOW)
 

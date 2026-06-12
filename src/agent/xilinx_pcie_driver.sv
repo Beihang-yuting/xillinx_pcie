@@ -18,9 +18,7 @@
 //   10. 发布到分析端口
 //   11. item_done
 //
-// 注意：axis_transfer.tuser 仅 128 位宽，而 PG213 tuser 最大可达 375 位。
-//       当 DATA_WIDTH >= 256 时，高位 tuser 字段会被截断。
-//       若需完整 tuser 支持，须扩展 axis_transfer.tuser 宽度。
+// axis_transfer.tuser 容器已加宽到 512 位，可完整承载各通道 PG213 tuser 字段。
 //=============================================================================
 
 // 内部辅助 sequence：用于在指定 axis_sequencer 上发送单个 axis_transfer
@@ -79,6 +77,11 @@ class xilinx_pcie_driver extends uvm_driver #(pcie_tl_tlp);
     // TLP 发送分析端口：每成功发送一个 TLP 后广播
     uvm_analysis_port #(pcie_tl_tlp) tlp_tx_ap;
 
+    // 本 agent 的 requester_id（BDF），用于在 TLP 中打上发送方标记
+    // 由 agent.connect_phase 设置：RC=0x0000, EP=0x0100
+    // 使 write() 回调能区分"本 agent 自发"与"对端发来"的 TLP
+    bit [15:0] own_requester_id = 16'h0000;
+
     //=========================================================================
     // 构造函数
     //=========================================================================
@@ -105,6 +108,15 @@ class xilinx_pcie_driver extends uvm_driver #(pcie_tl_tlp);
             // 步骤 1：从 sequencer 获取下一个 TLP 事务
             // -----------------------------------------------------------------
             seq_item_port.get_next_item(tlp);
+
+            // -----------------------------------------------------------------
+            // 步骤 1b：打上发送方 requester_id（BDF），使监控回调能区分
+            // 本 agent 自发的 TLP 与从对端收到的 TLP
+            // 仅对请求类 TLP（非 Completion）且未设置 requester_id 时才打标
+            // -----------------------------------------------------------------
+            if (tlp.requester_id == 16'h0000 &&
+                !(tlp.kind inside {TLP_CPL, TLP_CPLD, TLP_CPL_LK, TLP_CPLD_LK}))
+                tlp.requester_id = own_requester_id;
 
             // -----------------------------------------------------------------
             // 步骤 2：可选 Tag 分配（仅 Non-Posted 请求需要）
@@ -272,7 +284,7 @@ class xilinx_pcie_driver extends uvm_driver #(pcie_tl_tlp);
 
         for (int i = 0; i < num_beats; i++) begin
             axis_transfer xfer;
-            bit [127:0]   tuser_val;
+            bit [511:0]   tuser_val;
 
             // 创建 axis_transfer 序列项
             xfer = axis_transfer::type_id::create(
@@ -365,9 +377,8 @@ class xilinx_pcie_driver extends uvm_driver #(pcie_tl_tlp);
 
     //=========================================================================
     // encode_tuser_for_beat：为单个 beat 编码 tuser
-    // 注意：axis_transfer.tuser 仅 128 位，此处截断高位
     //=========================================================================
-    protected function bit [127:0] encode_tuser_for_beat(
+    protected function bit [511:0] encode_tuser_for_beat(
         pcie_tl_tlp      tlp,
         xilinx_channel_e channel,
         bit [511:0]      tdata,
@@ -376,7 +387,7 @@ class xilinx_pcie_driver extends uvm_driver #(pcie_tl_tlp);
         bit              is_last,
         bit [15:0]       dw_keep = 16'hFFFF
     );
-        bit [127:0] tuser_truncated;
+        bit [511:0] tuser_truncated;
 
         case (channel)
             XILINX_CH_RQ: begin
@@ -402,7 +413,7 @@ class xilinx_pcie_driver extends uvm_driver #(pcie_tl_tlp);
                     .tag_9_8     (beat_idx == 0 ? tag_9_8 : 2'h0),
                     .tdata       (tdata)
                 );
-                tuser_truncated = tuser_full[127:0];
+                tuser_truncated = tuser_full;
             end
 
             XILINX_CH_RC: begin
@@ -436,7 +447,7 @@ class xilinx_pcie_driver extends uvm_driver #(pcie_tl_tlp);
                         .tdata        (tdata)
                     );
                 end
-                tuser_truncated = tuser_full[127:0];
+                tuser_truncated = tuser_full;
             end
 
             XILINX_CH_CQ: begin
@@ -480,7 +491,7 @@ class xilinx_pcie_driver extends uvm_driver #(pcie_tl_tlp);
                         .tdata        (tdata)
                     );
                 end
-                tuser_truncated = tuser_full[127:0];
+                tuser_truncated = tuser_full;
             end
 
             XILINX_CH_CC: begin
@@ -491,7 +502,7 @@ class xilinx_pcie_driver extends uvm_driver #(pcie_tl_tlp);
                     .discontinue (1'b0),
                     .tdata       (tdata)
                 );
-                tuser_truncated = tuser_full[127:0];
+                tuser_truncated = tuser_full;
             end
 
             default: begin

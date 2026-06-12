@@ -53,16 +53,18 @@ class xilinx_pcie_interrupt_driver extends uvm_driver #(uvm_sequence_item);
         @(posedge cfg_vif.clk);
         wait (cfg_vif.rst_n === 1'b1);
 
-        if (role == XILINX_PCIE_EP) begin
-            // EP 角色：初始化所有中断输出信号为无效值，等待上层调用 task
+        // EP 角色：用户侧中断输出初始化为无效值，等待上层调用 task
+        if (role == XILINX_PCIE_EP)
             _ep_idle_init();
-        end else begin
-            // RC 角色：初始化状态输出后进入响应循环
-            fork
-                _rc_init_int_status();
-                _rc_int_respond_loop();
-            join_none
-        end
+
+        // 本地 PCIe 硬核 IP 行为模型：在本 cfg_if 的 pcie_ip 侧驱动
+        // msi_enable 状态并应答 msi_sent/cfg_interrupt_sent。
+        // EP 侧由用户逻辑发起 MSI/MSI-X 中断，必须由【本地】IP 回应
+        // cfg_interrupt_msi_sent，故 RC/EP 两种角色都需运行 IP 侧初始化与响应循环。
+        fork
+            _rc_init_int_status();
+            _rc_int_respond_loop();
+        join_none
     endtask : run_phase
 
     //=========================================================================

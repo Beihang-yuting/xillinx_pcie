@@ -23,6 +23,9 @@ class xilinx_pcie_dma_seq extends xilinx_pcie_base_seq;
     // DMA 写时的源数据（从 EP 本地内存读出的数据）
     rand bit [7:0]       src_data[];
 
+    // 由上层 vseq 赋值（EP 发起 DMA → 对端是 host，赋 v_sqr.host_mem）；null 表示不用统一内存
+    host_mem_api         target_mem;
+
     //=========================================================================
     // 约束
     //=========================================================================
@@ -54,6 +57,11 @@ class xilinx_pcie_dma_seq extends xilinx_pcie_base_seq;
         int unsigned offset;
         int unsigned chunk;
         int unsigned tlp_idx;
+
+        // use_unified_mem 模式：从目标内存分配对齐缓冲区，覆盖调用方传入的 host_addr
+        if (cfg.use_unified_mem && target_mem != null) begin
+            host_addr = target_mem.alloc(total_length, 64);
+        end
 
         remaining    = total_length;
         current_addr = host_addr;

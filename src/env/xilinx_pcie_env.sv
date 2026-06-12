@@ -25,14 +25,20 @@ class xilinx_pcie_env extends uvm_env;
     xilinx_pcie_env_config cfg;
 
     //=========================================================================
+    // 统一内存句柄（use_unified_mem=1 时从 config_db 获取，默认不使用）
+    //=========================================================================
+    host_mem_api host_mem;
+    host_mem_api dev_mem;
+
+    //=========================================================================
     // 子组件
     //=========================================================================
 
-    // RC Agent：Root Complex 特化 agent
-    xilinx_pcie_rc_agent                rc_agent;
+    // RC Agent：Root Complex role agent（role 由 cfg.role=XILINX_PCIE_RC 设置）
+    xilinx_pcie_agent                   rc_agent;
 
-    // EP Agent：Endpoint 特化 agent
-    xilinx_pcie_ep_agent                ep_agent;
+    // EP Agent：Endpoint role agent（role 由 cfg.role=XILINX_PCIE_EP 设置）
+    xilinx_pcie_agent                   ep_agent;
 
     // RC 侧中断 Agent（cfg_interrupt 驱动/监控）
     xilinx_pcie_interrupt_agent         rc_int_agent;
@@ -103,10 +109,30 @@ class xilinx_pcie_env extends uvm_env;
             this, "ep_agent*", "cfg", ep_cfg);
 
         // -----------------------------------------------------------------
+        // 步骤 3b：统一内存初始化（门控，use_unified_mem=0 时完全跳过）
+        // 从 tb_top 通过 config_db 获取 host_mem_manager（以 host_mem_api 传入）
+        // 初始化内存区域并向 rc_agent*/ep_agent* 注入各自的 mem 句柄
+        // -----------------------------------------------------------------
+        if (cfg.use_unified_mem) begin
+            if (!uvm_config_db#(host_mem_api)::get(this, "", "host_mem", host_mem))
+                `uvm_fatal(get_type_name(), "use_unified_mem=1 但未从 tb 拿到 host_mem")
+            if (!uvm_config_db#(host_mem_api)::get(this, "", "dev_mem", dev_mem))
+                `uvm_fatal(get_type_name(), "use_unified_mem=1 但未从 tb 拿到 dev_mem")
+            host_mem.init_region(64'h0, 64'hFFFF_FFFF, cfg.mem_alloc_mode, cfg.mem_granule);
+            dev_mem.init_region (64'h0, 64'hFFFF_FFFF, cfg.mem_alloc_mode, cfg.mem_granule);
+            if (cfg.mem_access_mode == XILINX_MEM_PREMAP) begin
+                void'(host_mem.alloc(cfg.premap_size, cfg.mem_granule));
+                void'(dev_mem.alloc (cfg.premap_size, cfg.mem_granule));
+            end
+            uvm_config_db#(host_mem_api)::set(this, "rc_agent*", "mem", host_mem);
+            uvm_config_db#(host_mem_api)::set(this, "ep_agent*", "mem", dev_mem);
+        end
+
+        // -----------------------------------------------------------------
         // 步骤 4：创建 RC 和 EP agent
         // -----------------------------------------------------------------
-        rc_agent = xilinx_pcie_rc_agent::type_id::create("rc_agent", this);
-        ep_agent = xilinx_pcie_ep_agent::type_id::create("ep_agent", this);
+        rc_agent = xilinx_pcie_agent::type_id::create("rc_agent", this);
+        ep_agent = xilinx_pcie_agent::type_id::create("ep_agent", this);
 
         // -----------------------------------------------------------------
         // 步骤 4b：若中断使能，创建 RC/EP 侧中断 Agent
@@ -169,6 +195,12 @@ class xilinx_pcie_env extends uvm_env;
             v_sqr.rc_sqr = rc_agent.sequencer;
         if (ep_agent.sequencer != null)
             v_sqr.ep_sqr = ep_agent.sequencer;
+
+        // 统一内存句柄透传到 virtual sequencer（门控）
+        if (cfg.use_unified_mem) begin
+            v_sqr.host_mem = host_mem;
+            v_sqr.dev_mem  = dev_mem;
+        end
 
         // -----------------------------------------------------------------
         // 步骤 2：连接 Scoreboard（若使能）
