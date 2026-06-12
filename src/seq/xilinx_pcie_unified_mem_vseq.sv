@@ -4,9 +4,8 @@
 // 功能：以 use_unified_mem=1 模式验证双向内存访问路径
 //   Phase A：RC 通过 MWr/MRd 访问 EP dev_mem（RC↔EP）
 //   Phase B：EP 通过 MWr/MRd 访问 RC host_mem（EP↔RC）
+//   Phase D：EP 发起 AtomicOp（FetchAdd/Swap/CAS）到 RC host_mem，验证原子操作路径
 //   Phase C：泄漏检查（host_mem + dev_mem）
-//
-// 原子操作（FetchAdd/Swap/CAS）暂未包含，作为后续 follow-up 任务处理。
 //=============================================================================
 
 class xilinx_pcie_unified_mem_vseq extends uvm_sequence;
@@ -51,6 +50,7 @@ class xilinx_pcie_unified_mem_vseq extends uvm_sequence;
 
         _phase_a_dev_mem();
         _phase_b_host_mem();
+        _phase_d_atomic();
         _phase_c_leak_check();
 
         `uvm_info(get_type_name(), "===== unified_mem_vseq 完成 =====", UVM_LOW)
@@ -229,6 +229,217 @@ class xilinx_pcie_unified_mem_vseq extends uvm_sequence;
 
         `uvm_info(get_type_name(), "Phase B 完成", UVM_LOW)
     endtask : _phase_b_host_mem
+
+    //=========================================================================
+    // Phase D：原子操作端到端验证（EP → RC host_mem）
+    //
+    // 32 位操作（is_64bit=0，sz=4），each op 独立分配 / 预置 / 验证 / 释放。
+    // 验证顺序：FetchAdd → Swap → CAS(match) → CAS(no-match)
+    //=========================================================================
+    protected virtual task _phase_d_atomic();
+        bit [63:0] a;
+        int unsigned sz;
+        byte oldb[];
+        byte rd[];
+
+        `uvm_info(get_type_name(), "===== Phase D: Atomic 端到端验证 =====", UVM_LOW)
+
+        if (v_sqr.host_mem == null) begin
+            `uvm_fatal(get_type_name(), "Phase D: v_sqr.host_mem 为 null")
+        end
+
+        sz = 4;  // 32 位操作
+
+        // ------------------------------------------------------------------
+        // D1: FetchAdd
+        //   old=0x0000_0010, operand=0x0000_0005
+        //   expected new = old + operand = 0x0000_0015
+        // ------------------------------------------------------------------
+        begin
+            xilinx_pcie_atomic_seq seq;
+            longint unsigned old_val   = 32'h0000_0010;
+            longint unsigned opnd      = 32'h0000_0005;
+            longint unsigned expected  = old_val + opnd;
+            longint unsigned got;
+
+            `uvm_info(get_type_name(), "Phase D1: FetchAdd", UVM_LOW)
+
+            a = v_sqr.host_mem.alloc(sz, sz, `__FILE__, `__LINE__);
+            oldb = new[sz];
+            for (int i = 0; i < sz; i++)
+                oldb[i] = byte'((old_val >> (8*i)) & 32'hFF);
+            v_sqr.host_mem.write_mem(a, oldb, `__FILE__, `__LINE__);
+
+            seq = xilinx_pcie_atomic_seq::type_id::create("d1_fetchadd");
+            seq.cfg         = cfg;
+            seq.addr        = a;
+            seq.is_64bit    = 1'b0;
+            seq.atomic_kind = TLP_ATOMIC_FETCHADD;
+            seq.operand     = opnd;
+            seq.start(v_sqr.ep_sqr);
+
+            #1us;
+            v_sqr.host_mem.read_mem(a, sz, rd, `__FILE__, `__LINE__);
+            got = 0;
+            for (int i = 0; i < sz; i++)
+                got |= (longint'(rd[i]) & 64'hFF) << (8*i);
+
+            if (got !== expected)
+                `uvm_error(get_type_name(),
+                    $sformatf("Phase D1 FetchAdd FAIL: expected=0x%08h got=0x%08h",
+                        expected, got))
+            else
+                `uvm_info(get_type_name(),
+                    $sformatf("Phase D1 FetchAdd PASS: old=0x%08h op=0x%08h new=0x%08h",
+                        old_val, opnd, got), UVM_LOW)
+
+            v_sqr.host_mem.free(a, `__FILE__, `__LINE__);
+        end
+
+        // ------------------------------------------------------------------
+        // D2: Swap
+        //   old=0x0000_ABCD, operand=0x1234_5678
+        //   expected new = operand = 0x1234_5678
+        // ------------------------------------------------------------------
+        begin
+            xilinx_pcie_atomic_seq seq;
+            longint unsigned old_val  = 32'h0000_ABCD;
+            longint unsigned opnd     = 32'h1234_5678;
+            longint unsigned expected = opnd;
+            longint unsigned got;
+
+            `uvm_info(get_type_name(), "Phase D2: Swap", UVM_LOW)
+
+            a = v_sqr.host_mem.alloc(sz, sz, `__FILE__, `__LINE__);
+            oldb = new[sz];
+            for (int i = 0; i < sz; i++)
+                oldb[i] = byte'((old_val >> (8*i)) & 32'hFF);
+            v_sqr.host_mem.write_mem(a, oldb, `__FILE__, `__LINE__);
+
+            seq = xilinx_pcie_atomic_seq::type_id::create("d2_swap");
+            seq.cfg         = cfg;
+            seq.addr        = a;
+            seq.is_64bit    = 1'b0;
+            seq.atomic_kind = TLP_ATOMIC_SWAP;
+            seq.operand     = opnd;
+            seq.start(v_sqr.ep_sqr);
+
+            #1us;
+            v_sqr.host_mem.read_mem(a, sz, rd, `__FILE__, `__LINE__);
+            got = 0;
+            for (int i = 0; i < sz; i++)
+                got |= (longint'(rd[i]) & 64'hFF) << (8*i);
+
+            if (got !== expected)
+                `uvm_error(get_type_name(),
+                    $sformatf("Phase D2 Swap FAIL: expected=0x%08h got=0x%08h",
+                        expected, got))
+            else
+                `uvm_info(get_type_name(),
+                    $sformatf("Phase D2 Swap PASS: old=0x%08h opnd=0x%08h new=0x%08h",
+                        old_val, opnd, got), UVM_LOW)
+
+            v_sqr.host_mem.free(a, `__FILE__, `__LINE__);
+        end
+
+        // ------------------------------------------------------------------
+        // D3: CAS（匹配：compare == old，内存变为 swap_val）
+        //   old=0xDEAD_BEEF, compare=0xDEAD_BEEF, swap_val=0xCAFE_BABE
+        //   expected new = 0xCAFE_BABE
+        // ------------------------------------------------------------------
+        begin
+            xilinx_pcie_atomic_seq seq;
+            longint unsigned old_val  = 32'hDEAD_BEEF;
+            longint unsigned cmp      = 32'hDEAD_BEEF;
+            longint unsigned swp      = 32'hCAFE_BABE;
+            longint unsigned expected = swp;
+            longint unsigned got;
+
+            `uvm_info(get_type_name(), "Phase D3: CAS (match)", UVM_LOW)
+
+            a = v_sqr.host_mem.alloc(sz, sz, `__FILE__, `__LINE__);
+            oldb = new[sz];
+            for (int i = 0; i < sz; i++)
+                oldb[i] = byte'((old_val >> (8*i)) & 32'hFF);
+            v_sqr.host_mem.write_mem(a, oldb, `__FILE__, `__LINE__);
+
+            seq = xilinx_pcie_atomic_seq::type_id::create("d3_cas_match");
+            seq.cfg         = cfg;
+            seq.addr        = a;
+            seq.is_64bit    = 1'b0;
+            seq.atomic_kind = TLP_ATOMIC_CAS;
+            seq.compare     = cmp;
+            seq.swap_val    = swp;
+            seq.start(v_sqr.ep_sqr);
+
+            #1us;
+            v_sqr.host_mem.read_mem(a, sz, rd, `__FILE__, `__LINE__);
+            got = 0;
+            for (int i = 0; i < sz; i++)
+                got |= (longint'(rd[i]) & 64'hFF) << (8*i);
+
+            if (got !== expected)
+                `uvm_error(get_type_name(),
+                    $sformatf("Phase D3 CAS-match FAIL: expected=0x%08h got=0x%08h",
+                        expected, got))
+            else
+                `uvm_info(get_type_name(),
+                    $sformatf("Phase D3 CAS-match PASS: old=0x%08h cmp=0x%08h swp=0x%08h new=0x%08h",
+                        old_val, cmp, swp, got), UVM_LOW)
+
+            v_sqr.host_mem.free(a, `__FILE__, `__LINE__);
+        end
+
+        // ------------------------------------------------------------------
+        // D4: CAS（不匹配：compare != old，内存不变）
+        //   old=0x1111_2222, compare=0xFFFF_FFFF (≠ old), swap_val=0xAAAA_BBBB
+        //   expected new = old = 0x1111_2222 (unchanged)
+        // ------------------------------------------------------------------
+        begin
+            xilinx_pcie_atomic_seq seq;
+            longint unsigned old_val  = 32'h1111_2222;
+            longint unsigned cmp      = 32'hFFFF_FFFF;
+            longint unsigned swp      = 32'hAAAA_BBBB;
+            longint unsigned expected = old_val;
+            longint unsigned got;
+
+            `uvm_info(get_type_name(), "Phase D4: CAS (no-match)", UVM_LOW)
+
+            a = v_sqr.host_mem.alloc(sz, sz, `__FILE__, `__LINE__);
+            oldb = new[sz];
+            for (int i = 0; i < sz; i++)
+                oldb[i] = byte'((old_val >> (8*i)) & 32'hFF);
+            v_sqr.host_mem.write_mem(a, oldb, `__FILE__, `__LINE__);
+
+            seq = xilinx_pcie_atomic_seq::type_id::create("d4_cas_nomatch");
+            seq.cfg         = cfg;
+            seq.addr        = a;
+            seq.is_64bit    = 1'b0;
+            seq.atomic_kind = TLP_ATOMIC_CAS;
+            seq.compare     = cmp;
+            seq.swap_val    = swp;
+            seq.start(v_sqr.ep_sqr);
+
+            #1us;
+            v_sqr.host_mem.read_mem(a, sz, rd, `__FILE__, `__LINE__);
+            got = 0;
+            for (int i = 0; i < sz; i++)
+                got |= (longint'(rd[i]) & 64'hFF) << (8*i);
+
+            if (got !== expected)
+                `uvm_error(get_type_name(),
+                    $sformatf("Phase D4 CAS-nomatch FAIL: expected=0x%08h got=0x%08h",
+                        expected, got))
+            else
+                `uvm_info(get_type_name(),
+                    $sformatf("Phase D4 CAS-nomatch PASS: old=0x%08h cmp=0x%08h (mismatch) new=0x%08h (unchanged)",
+                        old_val, cmp, got), UVM_LOW)
+
+            v_sqr.host_mem.free(a, `__FILE__, `__LINE__);
+        end
+
+        `uvm_info(get_type_name(), "Phase D 完成", UVM_LOW)
+    endtask : _phase_d_atomic
 
     //=========================================================================
     // Phase C：泄漏检查

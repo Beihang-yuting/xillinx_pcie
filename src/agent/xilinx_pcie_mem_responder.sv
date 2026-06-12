@@ -36,8 +36,22 @@ class xilinx_pcie_mem_responder;
             return build_read_cpl(mem_req, (req.kind==TLP_MEM_RD_LK)?TLP_CPLD_LK:TLP_CPLD);
         end
         if (req.kind inside {TLP_ATOMIC_FETCHADD, TLP_ATOMIC_SWAP, TLP_ATOMIC_CAS}) begin
-            if ($cast(atm_req, req)) return build_atomic_cpl(atm_req);
-            return null;
+            if ($cast(atm_req, req)) begin
+                // 直接是 pcie_tl_atomic_tlp 子类（由序列构造时的情况）
+                return build_atomic_cpl(atm_req);
+            end else begin
+                // decode_cq/decode_rq 将 atomic 解码为 pcie_tl_mem_tlp，
+                // 此处从 mem_tlp 提取 addr/is_64bit 后走通用路径
+                pcie_tl_mem_tlp mem_atm;
+                if ($cast(mem_atm, req)) begin
+                    `uvm_info("MEM_RESP",
+                        $sformatf("atomic via mem_tlp: kind=%s addr=0x%016h is_64bit=%0b payload=%0d",
+                            req.kind.name(), mem_atm.addr, mem_atm.is_64bit, req.payload.size()),
+                        UVM_LOW)
+                    return build_atomic_cpl_base(req, mem_atm.addr, mem_atm.is_64bit);
+                end
+                return null;
+            end
         end
         return null;
     endfunction
@@ -75,24 +89,34 @@ class xilinx_pcie_mem_responder;
     endfunction
 
     protected function pcie_tl_cpl_tlp build_atomic_cpl(pcie_tl_atomic_tlp r);
+        return build_atomic_cpl_base(r, r.addr, r.is_64bit);
+    endfunction
+
+    // build_atomic_cpl_base: 使用 base TLP + 显式 addr/is_64bit 构建 atomic 完成包
+    // decode_cq/decode_rq 将 atomic TLP 解码为 pcie_tl_mem_tlp（而非 pcie_tl_atomic_tlp），
+    // 故此函数通过基类引用 + 从 mem_tlp cast 中提取 addr，无需 atomic 子类。
+    protected function pcie_tl_cpl_tlp build_atomic_cpl_base(
+        pcie_tl_tlp r, bit [63:0] atm_addr, bit is_64b
+    );
         pcie_tl_cpl_tlp  cpl; byte oldb[]; byte newb[];
         int unsigned     sz;
-        sz = r.is_64bit ? 32'd8 : 32'd4;
-        mem.read_mem(r.addr, sz, oldb, `__FILE__, `__LINE__);
-        compute_atomic(r, oldb, int'(sz), newb);
-        mem.write_mem(r.addr, newb, `__FILE__, `__LINE__);
+        sz = is_64b ? 32'd8 : 32'd4;
+        mem.read_mem(atm_addr, sz, oldb, `__FILE__, `__LINE__);
+        compute_atomic_base(r, oldb, int'(sz), newb);
+        mem.write_mem(atm_addr, newb, `__FILE__, `__LINE__);
         cpl = pcie_tl_cpl_tlp::type_id::create("atomic_cpl");
         cpl.kind=TLP_CPLD; cpl.fmt=FMT_3DW_WITH_DATA;
         cpl.requester_id=r.requester_id; cpl.tag=r.tag; cpl.completer_id=completer_id;
         cpl.cpl_status=CPL_STATUS_SC;
-        cpl.length=sz[9:0]/4; cpl.byte_count=sz[11:0]; cpl.lower_addr=r.addr[6:0];
+        cpl.length=sz[9:0]/4; cpl.byte_count=sz[11:0]; cpl.lower_addr=atm_addr[6:0];
         from_bytearr(oldb, cpl.payload);
         return cpl;
     endfunction
 
     // operand=payload[0..sz-1]; CAS: compare=payload[0..sz-1], swap=payload[sz..2sz-1]
-    protected function void compute_atomic(pcie_tl_atomic_tlp r, input byte oldb[],
-                                           input int sz, output byte newb[]);
+    // 基类版本：通过 pcie_tl_tlp.kind 和 payload 工作，不需要 atomic 子类
+    protected function void compute_atomic_base(pcie_tl_tlp r, input byte oldb[],
+                                                input int sz, output byte newb[]);
         longint unsigned oldv=0, opnd=0, cmp=0, swp=0, nv=0;
         newb = new[sz];
         for (int i=0;i<sz;i++) oldv |= (longint'(oldb[i]) & 64'hFF) << (8*i);
@@ -110,6 +134,12 @@ class xilinx_pcie_mem_responder;
             default: nv = oldv;
         endcase
         for (int i=0;i<sz;i++) newb[i] = byte'((nv >> (8*i)) & 64'hFF);
+    endfunction
+
+    // operand=payload[0..sz-1]; CAS: compare=payload[0..sz-1], swap=payload[sz..2sz-1]
+    protected function void compute_atomic(pcie_tl_atomic_tlp r, input byte oldb[],
+                                           input int sz, output byte newb[]);
+        compute_atomic_base(r, oldb, sz, newb);
     endfunction
 
 endclass

@@ -133,12 +133,19 @@ class xilinx_pcie_scoreboard extends uvm_scoreboard;
 
     //=========================================================================
     // 辅助函数：计算请求期望的总 completion 字节数
+    // AtomicOp CAS 的 payload = 2*sz（compare+swap），但 CplD 只返回 sz（旧值）
+    // FetchAdd/Swap payload = sz，CplD 也返回 sz（旧值），无需特殊处理
     //=========================================================================
     function int calc_expected_bytes(pcie_tl_tlp tlp);
+        int raw_bytes;
         if (tlp.length == 0)
-            return 4096;    // length=0 表示 1024 DW = 4096 字节
+            raw_bytes = 4096;  // length=0 表示 1024 DW = 4096 字节
         else
-            return tlp.length * 4;
+            raw_bytes = tlp.length * 4;
+        // CAS payload = 2*sz（compare||swap），CplD 只返回 sz（旧值）
+        if (tlp.kind == TLP_ATOMIC_CAS)
+            return raw_bytes / 2;
+        return raw_bytes;
     endfunction : calc_expected_bytes
 
     //=========================================================================
