@@ -210,7 +210,7 @@ env 组件实例名：`rc_agent` / `ep_agent`（各含 `rq_agent`/`rc_agent`/`cq
 |------|------|------|
 | `scb_enable` / `scb_completion_check` / `scb_data_integrity` / `scb_ordering_check` / `scb_descriptor_check` | 全 1 | scoreboard 各检查项 |
 | `rq/rc/cq/cc_protocol_check_enable` | 全 1 | 各通道协议检查 |
-| `desc_format_check_enable` / `tuser_consistency_check` / `payload_alignment_check` | 全 1 | |
+| `desc_format_check_enable` / `tuser_consistency_check` / `payload_alignment_check` | 全 1 | monitor 解码路径协议检查，TYPE/语义见 §11.3 |
 | `cov_enable` 及 `cov_*` | **全 0** | 覆盖率默认关，按需开 |
 
 ---
@@ -397,9 +397,27 @@ RC vs EP 各通道 axis master/slave 方向相反（与 §4 角色表一致）�
 [XILINX_PCIE_<ROLE>_<i>] <TLP_TYPE> = N      // 如 [XILINX_PCIE_EP_0] TLP_MEM_WR = 4
 ```
 
-key 为 `<role.name()>_<agent_id>`（`role.name()` 即 `XILINX_PCIE_RC`/`XILINX_PCIE_EP`）；`<TLP_TYPE>` 为 `tlp.kind` 枚举名。错误侧：对带 **poisoned（EP 位）** 的 TLP 聚合计数，`report_phase` 末尾以 `uvm_error("PROTO_ERR", ...)` 报出。
+key 为 `<role.name()>_<agent_id>`（`role.name()` 即 `XILINX_PCIE_RC`/`XILINX_PCIE_EP`）；`<TLP_TYPE>` 为 `tlp.kind` 枚举名。错误侧：对带 **poisoned（EP 位）** 的 TLP 聚合计数，外加下表的各项协议检查，`report_phase` 末尾以 `uvm_error("PROTO_ERR", ...)` 按 `[agent_key] <TYPE> xN` 报出。
 
-> **收集器不做数据/内存配对**（多 agent 拓扑下源宿对应关系由用户自行约定，须自查数据正确性）。**协议违规仍由各 agent 本地检查即时 `uvm_error`**（与单 agent 行为一致）；收集器只负责跨 agent 的类型直方图 + poisoned 聚合，作为"各 agent 均被驱动"的客观证据。
+> **收集器不做数据/内存配对**（多 agent 拓扑下源宿对应关系由用户自行约定，须自查数据正确性）。**协议违规仍由各 agent 本地检查即时 `uvm_error`**（与单 agent 行为一致）；收集器只负责跨 agent 的类型直方图 + poisoned/协议错误聚合，作为"各 agent 均被驱动"的客观证据。
+
+#### 已实现的协议检查（monitor 解码路径，逐项由 env_config 开关门控）
+
+各检查在 `src/agent/xilinx_pcie_monitor.sv` 的 `run_protocol_checks()` 中实现，于每个通道解码出 `pcie_tl_tlp` 后运行；违规时本地 `uvm_error` + `publish_error("<TYPE>")`，经 `err_ap → xilinx_pcie_error_tap → scoreboard.record_error()` 进入中央 `err_count`，最终以 `PROTO_ERR` 报出。所有检查仅使用解码路径实际可得字段，且对合法流量恒不触发（见各项不变式）。
+
+| env_config 开关 | TYPE | 检查定义（PG213 语义） |
+|---|---|---|
+| `rq_protocol_check_enable` | `RQ_PROTO` | RQ（请求）通道到达的 TLP 不得为完成类（`get_category()!=COMPLETION`）。 |
+| `rc_protocol_check_enable` | `RC_PROTO` | RC（完成）通道到达的 TLP 必须为完成类。 |
+| `cq_protocol_check_enable` | `CQ_PROTO` | CQ（请求）通道到达的 TLP 不得为完成类。 |
+| `cc_protocol_check_enable` | `CC_PROTO` | CC（完成）通道到达的 TLP 必须为完成类。 |
+| `desc_format_check_enable` | `DESC_FORMAT` | 描述符 `tag` 必须落在配置 tag 空间内：`tag < min(max_outstanding, extended_tag?1024:256)`。 |
+| `tuser_consistency_check` | `TUSER` | RQ/CQ 携带数据的写请求，其 tuser `first_be` 不应全零（数据传输首 DW 字节使能非零）。 |
+| `payload_alignment_check` | `PAYLOAD_ALIGN` | payload 字节数与 `length` 字段一致：WITH_DATA 时 `payload.size()==length*4`（`length==0` 视作 1024 DW=4096 B）；NO_DATA 时 `payload.size()==0`。 |
+
+另有 `MALFORMED`（空 axis_packet，解码路径既有检查）与 poisoned 聚合，与上表并存。
+
+> **注**：`straddle_boundary_check` 开关保留但当前未实现独立检查（straddle 拆包正确性由 straddle 引擎自身保证 + clean 回归覆盖）。方向类 `*_PROTO` 在标准 `write_*` 解码路径中因 decode 按通道强制 TLP 类别而不会被合法流量触发；其触发与全部 TYPE 的路由验证见 `tests/xilinx_pcie_err_inject_test.sv`（经 `monitor.inject_check_tlp()` 定向注入，逐条触发并断言 `PROTO_ERR [agent] <TYPE> x1`，且仅命中被注入 agent）。
 
 ### 11.4 demo
 
