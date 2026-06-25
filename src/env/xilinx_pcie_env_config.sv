@@ -17,6 +17,9 @@ class xilinx_pcie_env_config extends uvm_object;
     //-------------------------------------------------------------------------
     // BFM 角色：XILINX_PCIE_RC 或 XILINX_PCIE_EP
     xilinx_pcie_role_e          role        = XILINX_PCIE_EP;
+    // ---- 多 agent 数量（运行期，默认 1 保持向后兼容） ----
+    int                         num_rc = 1;   // RC agent 数量
+    int                         num_ep = 1;   // EP agent 数量
     // UVM 激活/被动模式：UVM_ACTIVE 时 driver 主动驱动，UVM_PASSIVE 时仅监听
     uvm_active_passive_enum     is_active   = UVM_ACTIVE;
 
@@ -324,6 +327,8 @@ class xilinx_pcie_env_config extends uvm_object;
 
         // 参数组 1：角色与激活模式
         this.role                       = o.role;
+        this.num_rc                     = o.num_rc;
+        this.num_ep                     = o.num_ep;
         this.is_active                  = o.is_active;
 
         // 参数组 2：AXI-Stream 数据位宽
@@ -474,6 +479,13 @@ class xilinx_pcie_env_config extends uvm_object;
             `uvm_error("XILINX_PCIE_CFG",
                 $sformatf("[validate] read_completion_boundary=%0d 非法，必须为 64 或 128",
                           read_completion_boundary))
+            ok = 1'b0;
+        end
+
+        // 多 agent 数量合法性：非负且至少存在一个 agent
+        if (num_rc < 0 || num_ep < 0 || (num_rc + num_ep) < 1) begin
+            `uvm_error("XILINX_PCIE_CFG",
+                $sformatf("[validate] 非法 agent 数量: num_rc=%0d num_ep=%0d", num_rc, num_ep))
             ok = 1'b0;
         end
 
