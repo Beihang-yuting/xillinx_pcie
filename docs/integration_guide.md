@@ -19,6 +19,7 @@
 8. [连接真实 Xilinx PCIe IP](#8-连接真实-xilinx-pcie-ip)
 9. [复位接线注意点](#9-复位接线注意点)
 10. [已知陷阱](#10-已知陷阱)
+11. [多 agent 配置（可配 N RC + M EP）](#11-多-agent-配置可配-n-rc--m-ep)
 
 ---
 
@@ -331,3 +332,110 @@ PG213 AXI-Stream 端口对应（EP 侧）：
 - **覆盖率默认关**：`cov_enable=0`，要测覆盖率须显式打开 `cov_*`。
 - **统一内存默认关**：`use_unified_mem=0`；开启需注入 `host_mem`/`dev_mem` 句柄（tb_top 已注册，见 §4）。
 - **回归基线**：在更新版 axis 上，`sanity/loopback/stress/unified_mem/straddle`@DW=256 与 `sanity`@DW=512 全部 `UVM_ERROR=0`（已实测）。
+
+---
+
+## 11. 多 agent 配置（可配 N RC + M EP）
+
+默认 env 为 1 RC + 1 EP。本特性允许在一个 env 内例化 **N 个 RC + M 个 EP** agent（如多 RC 拓扑、多 EP fan-out），数量由 `env_config.num_rc` / `num_ep` 驱动，tb 用连线宏逐 agent 接入。**向后兼容**：两者默认均为 1，现有 `tb_top` 与全部 7 个 test 行为不变。
+
+### 11.1 数量配置（`num_rc` / `num_ep`）
+
+| 字段 | 默认 | 说明 |
+|------|------|------|
+| `num_rc` | 1 | RC agent 数量（实例名 `rc_agent_0..num_rc-1`） |
+| `num_ep` | 1 | EP agent 数量（实例名 `ep_agent_0..num_ep-1`） |
+
+约束（`xilinx_pcie_env_config::validate`）：`num_rc≥0`、`num_ep≥0` 且 `num_rc+num_ep≥1`，否则 `uvm_fatal`。
+
+**在 test 里设**：`base_test.build_phase` 按
+`create(cfg) → _parse_plusargs() → validate() → create(env)` 顺序执行，故须在 **`_parse_plusargs()` 钩子**里写 `cfg.num_rc/num_ep`（在 validate 与 env build 之前生效）。覆盖该 protected 虚函数即可（见 `tests/xilinx_pcie_multi_agent_test.sv`）：
+
+```systemverilog
+protected virtual function void _parse_plusargs();
+    super._parse_plusargs();
+    cfg.num_rc = 1;
+    cfg.num_ep = 3;
+endfunction
+```
+
+> 不要在 `run_phase` 或自定义 build 后段改 `num_*` —— env 已按旧值建好 agent 数组，改了不生效。
+
+### 11.2 连线宏（`XILINX_PCIE_WIRE_RC` / `WIRE_EP`）
+
+宏定义在 `tb/xilinx_pcie_connect.svh`，签名：
+
+```
+`XILINX_PCIE_WIRE_RC(IDX, PCIE_IF, CFG_IF, CLK, RSTN)
+`XILINX_PCIE_WIRE_EP(IDX, PCIE_IF, CFG_IF, CLK, RSTN)
+```
+
+每个宏对 **一个** agent 做三件事：
+
+1. **声明该 agent 的 4 条 `axis_if`**（`<role>_agent_<IDX>_{rq,rc,cq,cc}_if`），按 PG213 各通道 TUSER 宽度参数化（`#(XILINX_DATA_W,4,4,<ch>_TUSER_W,0,1,1)`）；
+2. **按角色方向桥接** `axis_if` ⇄ `PCIE_IF`（含 tkeep per-byte ⇄ per-DW 转换 `xilinx_byte_keep_to_dw`/`xilinx_dw_keep_to_byte`）；
+3. **按索引路径 `config_db` 注册** 4 条 axis vif（路径 `uvm_test_top.env.<role>_agent_<IDX>.<ch>_agent*`）+ cfg/int vif（`<role>_cfg_agent_<IDX>*` / `<role>_int_agent_<IDX>*`）。
+
+RC vs EP 各通道 axis master/slave 方向相反（与 §4 角色表一致）：
+
+| 通道 | RC 侧 | EP 侧 | 桥接方向 |
+|------|-------|-------|----------|
+| RQ | SLAVE | **MASTER** | RC: pcie→axis；EP: axis→pcie |
+| RC | **MASTER** | SLAVE | RC: axis→pcie；EP: pcie→axis |
+| CQ | **MASTER** | SLAVE | RC: axis→pcie；EP: pcie→axis |
+| CC | SLAVE | **MASTER** | RC: pcie→axis；EP: axis→pcie |
+
+**契约（务必遵守）**：tb 里 `WIRE_<role>` 宏的调用次数必须 **≥ `cfg.num_<role>`**。env 的每个 agent 在 build 时按索引路径取 vif，缺失则 `uvm_fatal`（agent 取不到 vif）。
+
+**无 DUT 时**：宏只**读取**（消费）master 通道的 `PCIE_IF.<ch>_tready`、不驱动它，故须把 master 通道 DUT 侧的 tready 手动拉高，否则发包被反压。按角色：RC 的 master 通道是 `rc`/`cq`，EP 的是 `rq`/`cc`。demo `tb/tb_multi_agent.sv` 即对 RC 拉高 `rc_tready`/`cq_tready`、对各 EP 拉高 `rq_tready`/`cc_tready`。slave 通道的 `*_tready` 由宏（agent 侧）驱动，**切勿**在 tb 里重复驱动，否则多驱动错误。
+
+### 11.3 检查模型
+
+多 agent 下，原 scoreboard（`src/env/xilinx_pcie_scoreboard.sv`）退化为**中心收集器**：经各 agent 的 collector tap 调用 `record(agent_id, role, tlp)`，**按 agent 分协议类型做直方图**。`report_phase` 打印：
+
+```
+[XILINX_PCIE_<ROLE>_<i>] <TLP_TYPE> = N      // 如 [XILINX_PCIE_EP_0] TLP_MEM_WR = 4
+```
+
+key 为 `<role.name()>_<agent_id>`（`role.name()` 即 `XILINX_PCIE_RC`/`XILINX_PCIE_EP`）；`<TLP_TYPE>` 为 `tlp.kind` 枚举名。错误侧：对带 **poisoned（EP 位）** 的 TLP 聚合计数，`report_phase` 末尾以 `uvm_error("PROTO_ERR", ...)` 报出。
+
+> **收集器不做数据/内存配对**（多 agent 拓扑下源宿对应关系由用户自行约定，须自查数据正确性）。**协议违规仍由各 agent 本地检查即时 `uvm_error`**（与单 agent 行为一致）；收集器只负责跨 agent 的类型直方图 + poisoned 聚合，作为"各 agent 均被驱动"的客观证据。
+
+### 11.4 demo
+
+最小可跑示例：`tb/tb_multi_agent.sv`（**1 RC + 3 EP，宏连线，无 DUT**，演示 posted MWr）。
+
+- tb 实例化 1 套 RC + 3 套 EP 的 `xilinx_pcie_if`/`xilinx_pcie_cfg_if`，对各 master 通道 DUT 侧 tready 拉高，再调用宏：
+
+  ```systemverilog
+  `XILINX_PCIE_WIRE_RC(0, rc_if,  rc_cfg_if,  clk, rst_n)
+  `XILINX_PCIE_WIRE_EP(0, ep0_if, ep0_cfg_if, clk, rst_n)
+  `XILINX_PCIE_WIRE_EP(1, ep1_if, ep1_cfg_if, clk, rst_n)
+  `XILINX_PCIE_WIRE_EP(2, ep2_if, ep2_cfg_if, clk, rst_n)
+  ```
+
+- test `tests/xilinx_pcie_multi_agent_test.sv`：在 `_parse_plusargs()` 里设 `num_rc=1 num_ep=3`，`run_phase` 给每个 `env.v_sqr.ep_sqr_arr[i]` 各发 4 笔 **posted MWr**（`is_write=1`，无 MRd，避免无应答对端的 completion 超时）。收集器据此打印 `[XILINX_PCIE_EP_0/1/2] TLP_MEM_WR = 4`，证明 3 个 EP 均被驱动。
+- filelist `sim/filelist_multi.f`：在 `filelist.f` 基础上把仿真顶层换为 `tb_multi_agent.sv`、**去掉 `loopback_dut`**（无 DUT，否则其接口端口悬空报错）、并加入 `xilinx_pcie_multi_agent_test.sv`。
+
+跑法：
+
+```bash
+cd xilinx_pcie/sim
+vcs -sverilog -ntb_opts uvm-1.2 -timescale=1ns/1ps -full64 \
+    -f filelist_multi.f +define+DATA_WIDTH=256 +define+STRADDLE_EN=0 -o work/simv_multi
+./work/simv_multi +UVM_TESTNAME=xilinx_pcie_multi_agent_test +DATA_WIDTH=256 +STRADDLE_EN=0 +ntb_random_seed=1
+```
+
+### 11.5 回归基线
+
+下表为 DATA_WIDTH ∈ {256, 512} 全矩阵实测（host 61，`+STRADDLE_EN=0`，`ntb_random_seed=1`；base 用 `filelist.f`/`tb_top`，multi_agent 用 `filelist_multi.f`/`tb_multi_agent`）。全部 `UVM_ERROR : 0 / UVM_FATAL : 0`：
+
+| test | DW=256 | DW=512 |
+|------|:------:|:------:|
+| `sanity` | PASS | PASS |
+| `loopback` | PASS | PASS |
+| `stress` | PASS | PASS |
+| `straddle` | PASS | PASS |
+| `unified_mem` | PASS | PASS |
+| `mega_stress` | PASS | PASS |
+| `multi_agent`（1 RC + 3 EP） | PASS | PASS |
