@@ -15,10 +15,14 @@ class xilinx_pcie_virtual_sequencer extends uvm_sequencer;
     // 子 agent sequencer 引用（由 env 的 connect_phase 设置）
     //=========================================================================
 
-    // RC agent 的 TLP sequencer：用于从 RC 侧发送请求 TLP
+    // RC/EP agent 的 TLP sequencer 数组（由 env 的 connect_phase 按 agent 顺序填充）
+    uvm_sequencer #(pcie_tl_tlp) rc_sqr_arr[$];
+    uvm_sequencer #(pcie_tl_tlp) ep_sqr_arr[$];
+
+    // RC agent 的 TLP sequencer：用于从 RC 侧发送请求 TLP（别名 = rc_sqr_arr[0]）
     uvm_sequencer #(pcie_tl_tlp) rc_sqr;
 
-    // EP agent 的 TLP sequencer：用于从 EP 侧发送请求/响应 TLP
+    // EP agent 的 TLP sequencer：用于从 EP 侧发送请求/响应 TLP（别名 = ep_sqr_arr[0]）
     uvm_sequencer #(pcie_tl_tlp) ep_sqr;
 
     //=========================================================================

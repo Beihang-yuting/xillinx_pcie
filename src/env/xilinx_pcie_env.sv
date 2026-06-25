@@ -202,11 +202,15 @@ class xilinx_pcie_env extends uvm_env;
         v_sqr.fc_mgr  = rc_agent.fc_mgr;
         v_sqr.ord_eng = rc_agent.ord_eng;
 
-        // 连接 RC/EP sequencer 引用
-        if (rc_agent.sequencer != null)
-            v_sqr.rc_sqr = rc_agent.sequencer;
-        if (ep_agent.sequencer != null)
-            v_sqr.ep_sqr = ep_agent.sequencer;
+        // 连接 RC/EP sequencer 引用：数组化（每个 agent 一项）+ [0] 别名
+        foreach (rc_agents[i])
+            if (rc_agents[i].sequencer != null)
+                v_sqr.rc_sqr_arr.push_back(rc_agents[i].sequencer);
+        foreach (ep_agents[i])
+            if (ep_agents[i].sequencer != null)
+                v_sqr.ep_sqr_arr.push_back(ep_agents[i].sequencer);
+        if (v_sqr.rc_sqr_arr.size() > 0) v_sqr.rc_sqr = v_sqr.rc_sqr_arr[0];
+        if (v_sqr.ep_sqr_arr.size() > 0) v_sqr.ep_sqr = v_sqr.ep_sqr_arr[0];
 
         // 统一内存句柄透传到 virtual sequencer（门控）
         if (cfg.use_unified_mem) begin
