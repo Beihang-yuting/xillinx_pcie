@@ -159,12 +159,30 @@ class xilinx_pcie_env extends uvm_env;
         if (cfg.interrupt_enable) begin
             // 按 num_rc/num_ep 例化为数组；实例名 rc_int_agent_%0d / ep_int_agent_%0d
             // 与连接宏在 config_db 注册的索引路径（rc_int_agent_0* 等）匹配
-            for (int i = 0; i < cfg.num_rc; i++)
+            // 同时为每个 int agent 注册其 env_config（key="env_config"，与 int agent
+            // connect_phase 的 get 匹配），否则 cfg 为 null 退化为 Legacy 模式。
+            // 用 per-role 克隆：int driver 依据 cfg.role 分支 RC/EP 行为，且读取
+            // msi/interrupt 字段，克隆可避免与主 agent 共享句柄被 role 改写。
+            for (int i = 0; i < cfg.num_rc; i++) begin
+                xilinx_pcie_env_config ic;
+                $cast(ic, cfg.clone());
+                ic.set_name($sformatf("rc_int_cfg_%0d", i));
+                ic.role = XILINX_PCIE_RC;
+                uvm_config_db #(xilinx_pcie_env_config)::set(
+                    this, $sformatf("rc_int_agent_%0d*", i), "env_config", ic);
                 rc_int_agents.push_back(xilinx_pcie_interrupt_agent::type_id::create(
                     $sformatf("rc_int_agent_%0d", i), this));
-            for (int i = 0; i < cfg.num_ep; i++)
+            end
+            for (int i = 0; i < cfg.num_ep; i++) begin
+                xilinx_pcie_env_config ic;
+                $cast(ic, cfg.clone());
+                ic.set_name($sformatf("ep_int_cfg_%0d", i));
+                ic.role = XILINX_PCIE_EP;
+                uvm_config_db #(xilinx_pcie_env_config)::set(
+                    this, $sformatf("ep_int_agent_%0d*", i), "env_config", ic);
                 ep_int_agents.push_back(xilinx_pcie_interrupt_agent::type_id::create(
                     $sformatf("ep_int_agent_%0d", i), this));
+            end
 
             // 旧 key 兼容（msi_seq 用 "int_agent"），指向 ep_int_agents[0]
             // all-RC(num_ep=0) 时 ep_int_agents 为空，跳过此旧 key 设置避免越界
