@@ -61,21 +61,11 @@ class xilinx_pcie_unified_mem_test extends xilinx_pcie_base_test;
         `uvm_info(get_type_name(),
             "===== 序列完成，等待在途 Completion 排空 =====", UVM_LOW)
 
-        // drain：等待 scoreboard 在途请求清零，上限 200us
-        begin
-            int unsigned drain_us = 0;
-            while (env.scb != null && env.scb.outstanding_reqs.size() > 0 &&
-                   drain_us < 200) begin
-                #1us;
-                drain_us++;
-            end
-            if (env.scb != null && env.scb.outstanding_reqs.size() > 0)
-                `uvm_warning(get_type_name(),
-                    $sformatf("drain 超时：仍有 %0d 笔在途请求",
-                              env.scb.outstanding_reqs.size()))
-        end
+        // drain：collector 重构后不再追踪 outstanding 请求（数据配对已移除），
+        // 改为固定时长排空等待，确保最后的 completion 在撤销 objection 前返回。
+        #200us;
 
-        // 额外等待确保最后的 completion 已被 scoreboard 处理
+        // 额外等待确保最后的 completion 已被处理
         #50us;
 
         `uvm_info(get_type_name(), "===== unified_mem_test 完成 =====", UVM_LOW)

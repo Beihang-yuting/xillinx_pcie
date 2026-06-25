@@ -49,8 +49,11 @@ class xilinx_pcie_env extends uvm_env;
     // 虚拟 Sequencer：聚合 RC/EP sequencer
     xilinx_pcie_virtual_sequencer       v_sqr;
 
-    // Scoreboard：TLP 流量检查
+    // Scoreboard（重构为协议/错误收集器）
     xilinx_pcie_scoreboard              scb;
+
+    // 每 agent collector tap（RC + EP，各一个；build_phase 创建，connect_phase 连接）
+    xilinx_pcie_collector_tap           taps[$];
 
     // Coverage：功能覆盖率收集
     xilinx_pcie_coverage                cov;
@@ -177,6 +180,27 @@ class xilinx_pcie_env extends uvm_env;
         // -----------------------------------------------------------------
         if (cfg.scb_enable) begin
             scb = xilinx_pcie_scoreboard::type_id::create("scb", this);
+
+            // 每 agent 创建一个 collector tap（UVM 组件须在 build_phase 创建）。
+            // tap 转发 monitor TLP 输出到 collector；连接在 connect_phase 完成。
+            foreach (rc_agents[i]) begin
+                xilinx_pcie_collector_tap tp;
+                tp = xilinx_pcie_collector_tap::type_id::create(
+                    $sformatf("rc_tap_%0d", i), this);
+                tp.agent_id  = i;
+                tp.role      = XILINX_PCIE_RC;
+                tp.collector = scb;
+                taps.push_back(tp);
+            end
+            foreach (ep_agents[i]) begin
+                xilinx_pcie_collector_tap tp;
+                tp = xilinx_pcie_collector_tap::type_id::create(
+                    $sformatf("ep_tap_%0d", i), this);
+                tp.agent_id  = i;
+                tp.role      = XILINX_PCIE_EP;
+                tp.collector = scb;
+                taps.push_back(tp);
+            end
         end
 
         // -----------------------------------------------------------------
@@ -222,16 +246,24 @@ class xilinx_pcie_env extends uvm_env;
         // 步骤 2：连接 Scoreboard（若使能）
         // -----------------------------------------------------------------
         if (scb != null) begin
-            // 设置 scoreboard 配置
+            // 设置 collector 配置
             scb.cfg = this.cfg;
 
-            // RC agent 的 TX/RX 分析端口连接到 scoreboard
-            rc_agent.tlp_tx_ap.connect(scb.rc_tx_imp);
-            rc_agent.tlp_rx_ap.connect(scb.rc_rx_imp);
-
-            // EP agent 的 TX/RX 分析端口连接到 scoreboard
-            ep_agent.tlp_tx_ap.connect(scb.ep_tx_imp);
-            ep_agent.tlp_rx_ap.connect(scb.ep_rx_imp);
+            // 将每个 agent 的 monitor TLP 输出（tlp_rx_ap，覆盖该 agent 在
+            // RQ/RC/CQ/CC 四通道上观测到的全部 TLP）连接到对应 tap。
+            // taps[] 创建顺序：先 rc_agents[0..num_rc-1]，再 ep_agents[0..num_ep-1]，
+            // 与下方连接顺序一一对齐。
+            begin
+                int ti = 0;
+                foreach (rc_agents[i]) begin
+                    rc_agents[i].tlp_rx_ap.connect(taps[ti].analysis_export);
+                    ti++;
+                end
+                foreach (ep_agents[i]) begin
+                    ep_agents[i].tlp_rx_ap.connect(taps[ti].analysis_export);
+                    ti++;
+                end
+            end
         end
 
         // -----------------------------------------------------------------

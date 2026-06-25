@@ -66,8 +66,11 @@ package xilinx_pcie_pkg;
     // 虚拟 Sequencer：聚合 RC/EP sequencer，供顶层虚拟序列使用
     `include "env/xilinx_pcie_virtual_sequencer.sv"
 
-    // Scoreboard：4 路 TLP 流量检查（Completion 匹配、数据完整性、排序、描述符）
+    // Scoreboard（重构为协议/错误收集器）：按 agent 统计 TLP 协议类型直方图 + 错误类型聚合
     `include "env/xilinx_pcie_scoreboard.sv"
+
+    // 每 agent collector tap：转发 monitor TLP 输出到 collector（须在 scoreboard 之后，引用其类型）
+    `include "env/xilinx_pcie_collector_tap.sv"
 
     // Coverage：6 个 covergroup 采样 TLP 功能覆盖率
     `include "env/xilinx_pcie_coverage.sv"
