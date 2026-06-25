@@ -92,6 +92,24 @@ class xilinx_pcie_scoreboard extends uvm_scoreboard;
     endfunction : has_agent_key
 
     //=========================================================================
+    // get_err_count：返回某 agent_key 上某 err_type 的累计计数（不存在返回 0）。
+    //   供错误类型识别测试做精确断言（每类注入计数 == 期望值）。
+    //=========================================================================
+    function int unsigned get_err_count(string agent_key, string err_type);
+        if (err_count.exists(agent_key) && err_count[agent_key].exists(err_type))
+            return err_count[agent_key][err_type];
+        return 0;
+    endfunction : get_err_count
+
+    //=========================================================================
+    // total_err_types：返回某 agent_key 上观测到的不同错误类型个数（隔离断言用）。
+    //   未注入错误的 agent 应为 0。
+    //=========================================================================
+    function int unsigned total_err_types(string agent_key);
+        return err_count.exists(agent_key) ? err_count[agent_key].size() : 0;
+    endfunction : total_err_types
+
+    //=========================================================================
     // report_phase：输出协议类型直方图；对任何错误类型报 uvm_error
     //=========================================================================
     function void report_phase(uvm_phase phase);
