@@ -164,8 +164,10 @@ class xilinx_pcie_env extends uvm_env;
                     $sformatf("ep_int_agent_%0d", i), this));
 
             // 旧 key 兼容（msi_seq 用 "int_agent"），指向 ep_int_agents[0]
-            uvm_config_db #(xilinx_pcie_interrupt_agent)::set(
-                this, "*", "int_agent", ep_int_agents[0]);
+            // all-RC(num_ep=0) 时 ep_int_agents 为空，跳过此旧 key 设置避免越界
+            if (ep_int_agents.size() > 0)
+                uvm_config_db #(xilinx_pcie_interrupt_agent)::set(
+                    this, "*", "int_agent", ep_int_agents[0]);
             // 按索引 key（多 EP 时 msi_seq 可定向）
             foreach (ep_int_agents[i])
                 uvm_config_db #(xilinx_pcie_interrupt_agent)::set(
@@ -224,9 +226,17 @@ class xilinx_pcie_env extends uvm_env;
         // 步骤 1：设置 Virtual Sequencer 的引用
         // -----------------------------------------------------------------
         v_sqr.cfg     = this.cfg;
-        v_sqr.tag_mgr = rc_agent.tag_mgr;
-        v_sqr.fc_mgr  = rc_agent.fc_mgr;
-        v_sqr.ord_eng = rc_agent.ord_eng;
+        // 共享管理器（tag/fc/ord）取自一个 agent：优先 RC，无 RC 时回退 EP，
+        // 以支持 all-EP(num_rc=0) / all-RC(num_ep=0) 配置不空指针解引用。
+        if (rc_agents.size() > 0) begin
+            v_sqr.tag_mgr = rc_agents[0].tag_mgr;
+            v_sqr.fc_mgr  = rc_agents[0].fc_mgr;
+            v_sqr.ord_eng = rc_agents[0].ord_eng;
+        end else if (ep_agents.size() > 0) begin
+            v_sqr.tag_mgr = ep_agents[0].tag_mgr;
+            v_sqr.fc_mgr  = ep_agents[0].fc_mgr;
+            v_sqr.ord_eng = ep_agents[0].ord_eng;
+        end
 
         // 连接 RC/EP sequencer 引用：数组化（每个 agent 一项）+ [0] 别名
         foreach (rc_agents[i])
@@ -276,13 +286,17 @@ class xilinx_pcie_env extends uvm_env;
             cov.cfg = this.cfg;
 
             // 连接所有 4 路 TLP 分析端口到 coverage
-            // RC 侧的 TX 和 RX
-            rc_agent.tlp_tx_ap.connect(cov.analysis_export);
-            rc_agent.tlp_rx_ap.connect(cov.analysis_export);
+            // RC 侧的 TX 和 RX（all-EP 配置无 RC agent，需门控避免空指针）
+            if (rc_agents.size() > 0) begin
+                rc_agent.tlp_tx_ap.connect(cov.analysis_export);
+                rc_agent.tlp_rx_ap.connect(cov.analysis_export);
+            end
 
-            // EP 侧的 TX 和 RX
-            ep_agent.tlp_tx_ap.connect(cov.analysis_export);
-            ep_agent.tlp_rx_ap.connect(cov.analysis_export);
+            // EP 侧的 TX 和 RX（all-RC 配置无 EP agent，需门控避免空指针）
+            if (ep_agents.size() > 0) begin
+                ep_agent.tlp_tx_ap.connect(cov.analysis_export);
+                ep_agent.tlp_rx_ap.connect(cov.analysis_export);
+            end
         end
 
     endfunction : connect_phase
