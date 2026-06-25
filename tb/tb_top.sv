@@ -18,6 +18,7 @@
 
 `include "uvm_macros.svh"
 `include "xilinx_pcie_params.svh"
+`include "xilinx_pcie_connect.svh"
 import uvm_pkg::*;
 import axis_pkg::*;
 import host_mem_pkg::*;
@@ -34,15 +35,6 @@ module tb_top;
     localparam int RC_TUSER_WIDTH = `XILINX_RC_TUSER_W;
     localparam int CQ_TUSER_WIDTH = `XILINX_CQ_TUSER_W;
     localparam int CC_TUSER_WIDTH = `XILINX_CC_TUSER_W;
-    localparam int KEEP_WIDTH     = `XILINX_KEEP_W;
-
-    //=========================================================================
-    // 各通道参数化 vif typedef（参数须与 pkg 中 axis_agent_xx_t 内部 vif_t 一致）
-    //=========================================================================
-    typedef virtual axis_if #(DATA_WIDTH,4,4,RQ_TUSER_WIDTH,0,1,1) vif_rq_t;
-    typedef virtual axis_if #(DATA_WIDTH,4,4,RC_TUSER_WIDTH,0,1,1) vif_rc_t;
-    typedef virtual axis_if #(DATA_WIDTH,4,4,CQ_TUSER_WIDTH,0,1,1) vif_cq_t;
-    typedef virtual axis_if #(DATA_WIDTH,4,4,CC_TUSER_WIDTH,0,1,1) vif_cc_t;
 
     //=========================================================================
     // 统一内存实例（$unit 作用域，以 host_mem_api 句柄注入 UVM config_db）
@@ -90,119 +82,11 @@ module tb_top;
     xilinx_pcie_cfg_if ep_cfg_if (.clk(clk), .rst_n(rst_n));
 
     //=========================================================================
-    // axis_if 实例化 — 8 通道, 各通道按 PG213 真实宽度参数化
+    // axis_if 实例化 + 桥接 + vif config_db 注册
+    // 由 WIRE 宏完成（各 agent 4 通道 axis_if + tkeep 桥接 + indexed config_db set）
     //=========================================================================
-    axis_if #(DATA_WIDTH,4,4,RQ_TUSER_WIDTH,0,1,1) rc_rq_if (.aclk(clk), .aresetn(rst_n));
-    axis_if #(DATA_WIDTH,4,4,RC_TUSER_WIDTH,0,1,1) rc_rc_if (.aclk(clk), .aresetn(rst_n));
-    axis_if #(DATA_WIDTH,4,4,CQ_TUSER_WIDTH,0,1,1) rc_cq_if (.aclk(clk), .aresetn(rst_n));
-    axis_if #(DATA_WIDTH,4,4,CC_TUSER_WIDTH,0,1,1) rc_cc_if (.aclk(clk), .aresetn(rst_n));
-    axis_if #(DATA_WIDTH,4,4,RQ_TUSER_WIDTH,0,1,1) ep_rq_if (.aclk(clk), .aresetn(rst_n));
-    axis_if #(DATA_WIDTH,4,4,RC_TUSER_WIDTH,0,1,1) ep_rc_if (.aclk(clk), .aresetn(rst_n));
-    axis_if #(DATA_WIDTH,4,4,CQ_TUSER_WIDTH,0,1,1) ep_cq_if (.aclk(clk), .aresetn(rst_n));
-    axis_if #(DATA_WIDTH,4,4,CC_TUSER_WIDTH,0,1,1) ep_cc_if (.aclk(clk), .aresetn(rst_n));
-
-    //=========================================================================
-    // axis_if <-> xilinx_pcie_if 桥接
-    // 两侧 tdata/tuser 已等宽，直接 assign。
-    // tkeep 仍需转换：axis 为 per-byte，pcie 为 per-DW。
-    //=========================================================================
-    localparam int AXIS_TKEEP_WIDTH = DATA_WIDTH / 8;
-
-    function automatic logic [KEEP_WIDTH-1:0] byte_keep_to_dw_keep(
-        input logic [AXIS_TKEEP_WIDTH-1:0] byte_keep
-    );
-        logic [KEEP_WIDTH-1:0] dw_keep;
-        for (int dw = 0; dw < KEEP_WIDTH; dw++) begin
-            dw_keep[dw] = |byte_keep[dw*4 +: 4];
-        end
-        return dw_keep;
-    endfunction
-
-    function automatic logic [AXIS_TKEEP_WIDTH-1:0] dw_keep_to_byte_keep(
-        input logic [KEEP_WIDTH-1:0] dw_keep
-    );
-        logic [AXIS_TKEEP_WIDTH-1:0] byte_keep;
-        byte_keep = '0;
-        for (int dw = 0; dw < KEEP_WIDTH; dw++) begin
-            if (dw_keep[dw])
-                byte_keep[dw*4 +: 4] = 4'hF;
-        end
-        return byte_keep;
-    endfunction
-
-    logic [KEEP_WIDTH-1:0] rc_rc_dw_keep;
-    logic [KEEP_WIDTH-1:0] rc_cq_dw_keep;
-    logic [KEEP_WIDTH-1:0] ep_rq_dw_keep;
-    logic [KEEP_WIDTH-1:0] ep_cc_dw_keep;
-
-    always_comb rc_rc_dw_keep = byte_keep_to_dw_keep(rc_rc_if.tkeep[AXIS_TKEEP_WIDTH-1:0]);
-    always_comb rc_cq_dw_keep = byte_keep_to_dw_keep(rc_cq_if.tkeep[AXIS_TKEEP_WIDTH-1:0]);
-    always_comb ep_rq_dw_keep = byte_keep_to_dw_keep(ep_rq_if.tkeep[AXIS_TKEEP_WIDTH-1:0]);
-    always_comb ep_cc_dw_keep = byte_keep_to_dw_keep(ep_cc_if.tkeep[AXIS_TKEEP_WIDTH-1:0]);
-
-    // RC-RQ: axis SLAVE
-    assign rc_rq_if.tdata  = rc_if.rq_tdata;
-    assign rc_rq_if.tkeep  = dw_keep_to_byte_keep(rc_if.rq_tkeep);
-    assign rc_rq_if.tlast  = rc_if.rq_tlast;
-    assign rc_rq_if.tvalid = rc_if.rq_tvalid;
-    assign rc_rq_if.tuser  = rc_if.rq_tuser;
-    assign rc_if.rq_tready = rc_rq_if.tready;
-
-    // RC-RC: axis MASTER
-    assign rc_if.rc_tdata  = rc_rc_if.tdata;
-    assign rc_if.rc_tkeep  = rc_rc_dw_keep;
-    assign rc_if.rc_tlast  = rc_rc_if.tlast;
-    assign rc_if.rc_tvalid = rc_rc_if.tvalid;
-    assign rc_if.rc_tuser  = rc_rc_if.tuser;
-    assign rc_rc_if.tready = rc_if.rc_tready;
-
-    // RC-CQ: axis MASTER
-    assign rc_if.cq_tdata  = rc_cq_if.tdata;
-    assign rc_if.cq_tkeep  = rc_cq_dw_keep;
-    assign rc_if.cq_tlast  = rc_cq_if.tlast;
-    assign rc_if.cq_tvalid = rc_cq_if.tvalid;
-    assign rc_if.cq_tuser  = rc_cq_if.tuser;
-    assign rc_cq_if.tready = rc_if.cq_tready;
-
-    // RC-CC: axis SLAVE
-    assign rc_cc_if.tdata  = rc_if.cc_tdata;
-    assign rc_cc_if.tkeep  = dw_keep_to_byte_keep(rc_if.cc_tkeep);
-    assign rc_cc_if.tlast  = rc_if.cc_tlast;
-    assign rc_cc_if.tvalid = rc_if.cc_tvalid;
-    assign rc_cc_if.tuser  = rc_if.cc_tuser;
-    assign rc_if.cc_tready = rc_cc_if.tready;
-
-    // EP-RQ: axis MASTER
-    assign ep_if.rq_tdata  = ep_rq_if.tdata;
-    assign ep_if.rq_tkeep  = ep_rq_dw_keep;
-    assign ep_if.rq_tlast  = ep_rq_if.tlast;
-    assign ep_if.rq_tvalid = ep_rq_if.tvalid;
-    assign ep_if.rq_tuser  = ep_rq_if.tuser;
-    assign ep_rq_if.tready = ep_if.rq_tready;
-
-    // EP-RC: axis SLAVE
-    assign ep_rc_if.tdata  = ep_if.rc_tdata;
-    assign ep_rc_if.tkeep  = dw_keep_to_byte_keep(ep_if.rc_tkeep);
-    assign ep_rc_if.tlast  = ep_if.rc_tlast;
-    assign ep_rc_if.tvalid = ep_if.rc_tvalid;
-    assign ep_rc_if.tuser  = ep_if.rc_tuser;
-    assign ep_if.rc_tready = ep_rc_if.tready;
-
-    // EP-CQ: axis SLAVE
-    assign ep_cq_if.tdata  = ep_if.cq_tdata;
-    assign ep_cq_if.tkeep  = dw_keep_to_byte_keep(ep_if.cq_tkeep);
-    assign ep_cq_if.tlast  = ep_if.cq_tlast;
-    assign ep_cq_if.tvalid = ep_if.cq_tvalid;
-    assign ep_cq_if.tuser  = ep_if.cq_tuser;
-    assign ep_if.cq_tready = ep_cq_if.tready;
-
-    // EP-CC: axis MASTER
-    assign ep_if.cc_tdata  = ep_cc_if.tdata;
-    assign ep_if.cc_tkeep  = ep_cc_dw_keep;
-    assign ep_if.cc_tlast  = ep_cc_if.tlast;
-    assign ep_if.cc_tvalid = ep_cc_if.tvalid;
-    assign ep_if.cc_tuser  = ep_cc_if.tuser;
-    assign ep_cc_if.tready = ep_if.cc_tready;
+    `XILINX_PCIE_WIRE_RC(0, rc_if, rc_cfg_if, clk, rst_n)
+    `XILINX_PCIE_WIRE_EP(0, ep_if, ep_cfg_if, clk, rst_n)
 
     //=========================================================================
     // 回环 DUT 实例化
@@ -222,25 +106,9 @@ module tb_top;
     // UVM config_db 注册 + run_test()
     //=========================================================================
     initial begin
-        // RC 侧四通道
-        uvm_config_db #(vif_rq_t)::set(
-            null, "uvm_test_top.env.rc_agent.rq_agent*", "vif", rc_rq_if);
-        uvm_config_db #(vif_rc_t)::set(
-            null, "uvm_test_top.env.rc_agent.rc_agent*", "vif", rc_rc_if);
-        uvm_config_db #(vif_cq_t)::set(
-            null, "uvm_test_top.env.rc_agent.cq_agent*", "vif", rc_cq_if);
-        uvm_config_db #(vif_cc_t)::set(
-            null, "uvm_test_top.env.rc_agent.cc_agent*", "vif", rc_cc_if);
-
-        // EP 侧四通道
-        uvm_config_db #(vif_rq_t)::set(
-            null, "uvm_test_top.env.ep_agent.rq_agent*", "vif", ep_rq_if);
-        uvm_config_db #(vif_rc_t)::set(
-            null, "uvm_test_top.env.ep_agent.rc_agent*", "vif", ep_rc_if);
-        uvm_config_db #(vif_cq_t)::set(
-            null, "uvm_test_top.env.ep_agent.cq_agent*", "vif", ep_cq_if);
-        uvm_config_db #(vif_cc_t)::set(
-            null, "uvm_test_top.env.ep_agent.cc_agent*", "vif", ep_cc_if);
+        // 注意: 8 路 axis vif 的 config_db 注册已由 `XILINX_PCIE_WIRE_RC/EP 宏
+        //       在 indexed 路径 (rc_agent_0/ep_agent_0) 完成。
+        //       此处仅保留 cfg/interrupt agent 的 cfg_if（仍为非索引实例名）及统一内存。
 
         // RC 侧 cfg_if
         uvm_config_db #(virtual xilinx_pcie_cfg_if)::set(

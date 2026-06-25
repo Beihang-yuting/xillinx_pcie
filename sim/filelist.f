@@ -50,6 +50,7 @@
 +incdir+/home/ubuntu/ryan/xilinx_pcie/src/cfg
 +incdir+/home/ubuntu/ryan/xilinx_pcie/src/env
 +incdir+/home/ubuntu/ryan/xilinx_pcie/src/seq
++incdir+/home/ubuntu/ryan/xilinx_pcie/tb
 
 // 接口文件（模块，不在 package 内，需先于 package 编译）
 /home/ubuntu/ryan/xilinx_pcie/src/interface/xilinx_pcie_if.sv

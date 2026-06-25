@@ -34,11 +34,11 @@ class xilinx_pcie_env extends uvm_env;
     // 子组件
     //=========================================================================
 
-    // RC Agent：Root Complex role agent（role 由 cfg.role=XILINX_PCIE_RC 设置）
-    xilinx_pcie_agent                   rc_agent;
-
-    // EP Agent：Endpoint role agent（role 由 cfg.role=XILINX_PCIE_EP 设置）
-    xilinx_pcie_agent                   ep_agent;
+    // RC/EP Agent 数组（按 cfg.num_rc / cfg.num_ep 例化）
+    xilinx_pcie_agent rc_agents[$];
+    xilinx_pcie_agent ep_agents[$];
+    xilinx_pcie_agent rc_agent;   // 别名 = rc_agents[0]
+    xilinx_pcie_agent ep_agent;   // 别名 = ep_agents[0]
 
     // RC 侧中断 Agent（cfg_interrupt 驱动/监控）
     xilinx_pcie_interrupt_agent         rc_int_agent;
@@ -66,9 +66,6 @@ class xilinx_pcie_env extends uvm_env;
     // build_phase：创建和配置所有子组件
     //=========================================================================
     virtual function void build_phase(uvm_phase phase);
-        xilinx_pcie_env_config rc_cfg;
-        xilinx_pcie_env_config ep_cfg;
-
         super.build_phase(phase);
 
         // -----------------------------------------------------------------
@@ -87,26 +84,28 @@ class xilinx_pcie_env extends uvm_env;
         end
 
         // -----------------------------------------------------------------
-        // 步骤 2：为 RC agent 创建专用配置（clone + 设置 role = RC）
+        // 步骤 2：为每个 RC agent 创建专用配置（clone + 设置 role = RC）
         // -----------------------------------------------------------------
-        $cast(rc_cfg, cfg.clone());
-        rc_cfg.set_name("rc_cfg");
-        rc_cfg.role = XILINX_PCIE_RC;
-
-        // 注册到 config_db，供 RC agent 的 build_phase 获取
-        uvm_config_db #(xilinx_pcie_env_config)::set(
-            this, "rc_agent*", "cfg", rc_cfg);
+        for (int i = 0; i < cfg.num_rc; i++) begin
+            xilinx_pcie_env_config c;
+            $cast(c, cfg.clone());
+            c.set_name($sformatf("rc_cfg_%0d", i));
+            c.role = XILINX_PCIE_RC;
+            uvm_config_db #(xilinx_pcie_env_config)::set(
+                this, $sformatf("rc_agent_%0d*", i), "cfg", c);
+        end
 
         // -----------------------------------------------------------------
-        // 步骤 3：为 EP agent 创建专用配置（clone + 设置 role = EP）
+        // 步骤 3：为每个 EP agent 创建专用配置（clone + 设置 role = EP）
         // -----------------------------------------------------------------
-        $cast(ep_cfg, cfg.clone());
-        ep_cfg.set_name("ep_cfg");
-        ep_cfg.role = XILINX_PCIE_EP;
-
-        // 注册到 config_db，供 EP agent 的 build_phase 获取
-        uvm_config_db #(xilinx_pcie_env_config)::set(
-            this, "ep_agent*", "cfg", ep_cfg);
+        for (int i = 0; i < cfg.num_ep; i++) begin
+            xilinx_pcie_env_config c;
+            $cast(c, cfg.clone());
+            c.set_name($sformatf("ep_cfg_%0d", i));
+            c.role = XILINX_PCIE_EP;
+            uvm_config_db #(xilinx_pcie_env_config)::set(
+                this, $sformatf("ep_agent_%0d*", i), "cfg", c);
+        end
 
         // -----------------------------------------------------------------
         // 步骤 3b：统一内存初始化（门控，use_unified_mem=0 时完全跳过）
@@ -124,15 +123,28 @@ class xilinx_pcie_env extends uvm_env;
                 void'(host_mem.alloc(cfg.premap_size, cfg.mem_granule));
                 void'(dev_mem.alloc (cfg.premap_size, cfg.mem_granule));
             end
-            uvm_config_db#(host_mem_api)::set(this, "rc_agent*", "mem", host_mem);
-            uvm_config_db#(host_mem_api)::set(this, "ep_agent*", "mem", dev_mem);
+            for (int i = 0; i < cfg.num_rc; i++)
+                uvm_config_db#(host_mem_api)::set(this, $sformatf("rc_agent_%0d*", i), "mem", host_mem);
+            for (int i = 0; i < cfg.num_ep; i++)
+                uvm_config_db#(host_mem_api)::set(this, $sformatf("ep_agent_%0d*", i), "mem", dev_mem);
         end
 
         // -----------------------------------------------------------------
-        // 步骤 4：创建 RC 和 EP agent
+        // 步骤 4：创建 RC 和 EP agent（按 num_rc/num_ep 例化为数组）
         // -----------------------------------------------------------------
-        rc_agent = xilinx_pcie_agent::type_id::create("rc_agent", this);
-        ep_agent = xilinx_pcie_agent::type_id::create("ep_agent", this);
+        for (int i = 0; i < cfg.num_rc; i++) begin
+            xilinx_pcie_agent a;
+            a = xilinx_pcie_agent::type_id::create($sformatf("rc_agent_%0d", i), this);
+            rc_agents.push_back(a);
+        end
+        for (int i = 0; i < cfg.num_ep; i++) begin
+            xilinx_pcie_agent a;
+            a = xilinx_pcie_agent::type_id::create($sformatf("ep_agent_%0d", i), this);
+            ep_agents.push_back(a);
+        end
+        // 别名指向 [0]，保持 connect_phase / 旧代码引用兼容
+        if (rc_agents.size() > 0) rc_agent = rc_agents[0];
+        if (ep_agents.size() > 0) ep_agent = ep_agents[0];
 
         // -----------------------------------------------------------------
         // 步骤 4b：若中断使能，创建 RC/EP 侧中断 Agent
