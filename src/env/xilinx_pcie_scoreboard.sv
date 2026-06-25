@@ -76,6 +76,22 @@ class xilinx_pcie_scoreboard extends uvm_scoreboard;
     endfunction : record_error
 
     //=========================================================================
+    // num_agent_keys：返回已观测到的 agent 数量（proto_count 顶层 key 数）
+    //   供测试断言 agent 覆盖（例如 multi-EP 测试期望 4 个 EP 均被观测）。
+    //   注：仅统计有协议计数的 agent；纯 error agent 不计入。
+    //=========================================================================
+    function int unsigned num_agent_keys();
+        return proto_count.size();
+    endfunction : num_agent_keys
+
+    //=========================================================================
+    // has_agent_key：查询某 agent_key（如 "XILINX_PCIE_EP_2"）是否被观测到。
+    //=========================================================================
+    function bit has_agent_key(string ak);
+        return proto_count.exists(ak);
+    endfunction : has_agent_key
+
+    //=========================================================================
     // report_phase：输出协议类型直方图；对任何错误类型报 uvm_error
     //=========================================================================
     function void report_phase(uvm_phase phase);
