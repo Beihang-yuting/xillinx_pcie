@@ -42,7 +42,6 @@ endfunction
     uvm_config_db#(virtual axis_if #(`XILINX_DATA_W,4,4,`XILINX_RC_TUSER_W,0,1,1))::set(null,$sformatf("uvm_test_top.env.rc_agent_%0d.rc_agent*",IDX),"vif",rc_agent_``IDX``_rc_if); \
     uvm_config_db#(virtual axis_if #(`XILINX_DATA_W,4,4,`XILINX_CQ_TUSER_W,0,1,1))::set(null,$sformatf("uvm_test_top.env.rc_agent_%0d.cq_agent*",IDX),"vif",rc_agent_``IDX``_cq_if); \
     uvm_config_db#(virtual axis_if #(`XILINX_DATA_W,4,4,`XILINX_CC_TUSER_W,0,1,1))::set(null,$sformatf("uvm_test_top.env.rc_agent_%0d.cc_agent*",IDX),"vif",rc_agent_``IDX``_cc_if); \
-    uvm_config_db#(virtual xilinx_pcie_cfg_if)::set(null,$sformatf("uvm_test_top.env.rc_cfg_agent_%0d*",IDX),"cfg_vif",CFG_IF); \
     uvm_config_db#(virtual xilinx_pcie_cfg_if)::set(null,$sformatf("uvm_test_top.env.rc_int_agent_%0d*",IDX),"cfg_vif",CFG_IF); \
   end
 
@@ -73,7 +72,6 @@ endfunction
     uvm_config_db#(virtual axis_if #(`XILINX_DATA_W,4,4,`XILINX_RC_TUSER_W,0,1,1))::set(null,$sformatf("uvm_test_top.env.ep_agent_%0d.rc_agent*",IDX),"vif",ep_agent_``IDX``_rc_if); \
     uvm_config_db#(virtual axis_if #(`XILINX_DATA_W,4,4,`XILINX_CQ_TUSER_W,0,1,1))::set(null,$sformatf("uvm_test_top.env.ep_agent_%0d.cq_agent*",IDX),"vif",ep_agent_``IDX``_cq_if); \
     uvm_config_db#(virtual axis_if #(`XILINX_DATA_W,4,4,`XILINX_CC_TUSER_W,0,1,1))::set(null,$sformatf("uvm_test_top.env.ep_agent_%0d.cc_agent*",IDX),"vif",ep_agent_``IDX``_cc_if); \
-    uvm_config_db#(virtual xilinx_pcie_cfg_if)::set(null,$sformatf("uvm_test_top.env.ep_cfg_agent_%0d*",IDX),"cfg_vif",CFG_IF); \
     uvm_config_db#(virtual xilinx_pcie_cfg_if)::set(null,$sformatf("uvm_test_top.env.ep_int_agent_%0d*",IDX),"cfg_vif",CFG_IF); \
   end
 `endif

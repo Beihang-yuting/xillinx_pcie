@@ -106,21 +106,10 @@ module tb_top;
     // UVM config_db 注册 + run_test()
     //=========================================================================
     initial begin
-        // 注意: 8 路 axis vif 的 config_db 注册已由 `XILINX_PCIE_WIRE_RC/EP 宏
-        //       在 indexed 路径 (rc_agent_0/ep_agent_0) 完成。
-        //       此处仅保留 cfg/interrupt agent 的 cfg_if（仍为非索引实例名）及统一内存。
-
-        // RC 侧 cfg_if
-        uvm_config_db #(virtual xilinx_pcie_cfg_if)::set(
-            null, "uvm_test_top.env.rc_cfg_agent*", "cfg_vif", rc_cfg_if);
-        uvm_config_db #(virtual xilinx_pcie_cfg_if)::set(
-            null, "uvm_test_top.env.rc_int_agent*", "cfg_vif", rc_cfg_if);
-
-        // EP 侧 cfg_if
-        uvm_config_db #(virtual xilinx_pcie_cfg_if)::set(
-            null, "uvm_test_top.env.ep_cfg_agent*", "cfg_vif", ep_cfg_if);
-        uvm_config_db #(virtual xilinx_pcie_cfg_if)::set(
-            null, "uvm_test_top.env.ep_int_agent*", "cfg_vif", ep_cfg_if);
+        // 注意: 8 路 axis vif 及 int_agent 的 cfg_vif config_db 注册均由
+        //       `XILINX_PCIE_WIRE_RC(0,...)/WIRE_EP(0,...) 宏在 indexed 路径
+        //       (rc_agent_0/rc_int_agent_0/ep_agent_0/ep_int_agent_0) 完成，
+        //       宏为唯一来源。此处仅保留统一内存。
 
         // 统一内存：创建具体 host_mem_manager，以 host_mem_api 句柄传入 UVM
         // use_unified_mem=0（默认）时 env/agent 不会调用这些句柄，行为无变化
