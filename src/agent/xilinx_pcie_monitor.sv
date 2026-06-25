@@ -101,6 +101,17 @@ class xilinx_pcie_monitor extends uvm_component;
     endfunction : publish_error
 
     //=========================================================================
+    // inject_check_tlp：定向注入钩子（仅供 err_inject 测试使用）
+    // 直接以调用方构造的 TLP + 通道运行真实的 run_protocol_checks，
+    // 用于逐条触发各协议检查 TYPE，验证 publish_error -> tap -> collector 路由。
+    // 不影响正常 write_* 解码路径。
+    //=========================================================================
+    function void inject_check_tlp(pcie_tl_tlp tlp, xilinx_channel_e channel);
+        if (tlp != null)
+            run_protocol_checks(tlp, channel);
+    endfunction : inject_check_tlp
+
+    //=========================================================================
     // write_rq：RQ 通道回调 - 解码 RQ axis_packet 为 pcie_tl_tlp
     //=========================================================================
     function void write_rq(axis_packet pkt);
@@ -256,10 +267,145 @@ class xilinx_pcie_monitor extends uvm_component;
                 $sformatf("解码 %s 通道 TLP: %s, tag=0x%03h, payload=%0d bytes",
                     channel.name(), tlp.kind.name(), tlp.tag, tlp.payload.size()),
                 UVM_MEDIUM)
+
+            // 步骤 7：在已解码 TLP 上运行协议检查（按 env_config 开关分别门控）
+            run_protocol_checks(tlp, channel);
         end
 
         return tlp;
     endfunction : decode_packet
+
+    //=========================================================================
+    // run_protocol_checks：在已解码 pcie_tl_tlp 上运行 PG213 协议合规检查
+    //
+    // 仅使用 decode 路径实际可得的字段（kind/fmt/length/tag/payload，以及
+    // mem_tlp 的 addr/first_be/last_be）。每项检查由 env_config 对应开关门控，
+    // 违规时 uvm_error + publish_error("<TYPE>")，经 err_ap -> error tap ->
+    // collector 进入中央 PROTO_ERR 统计。
+    //
+    // 设计原则（防误报）：所有不变式对合法流量恒成立——
+    //   * payload 字节数恒为整 DW（unpack 按 tkeep 逐 DW 收集），故
+    //     WITH_DATA 时 payload.size()==length*4（length==0 视作 1024DW=4096B）；
+    //     NO_DATA 时 payload.size()==0（由 c_no_data_no_payload + unpack 保证）。
+    //   * RQ/CQ 解码恒产出请求类 TLP，RC/CC 解码恒产出完成类 TLP。
+    //   * 合法写请求 first_be 恒非零（c_legal_be）。
+    //   * 分配 tag 恒 < max_outstanding（tag pool 上界）。
+    //=========================================================================
+    protected function void run_protocol_checks(
+        pcie_tl_tlp      tlp,
+        xilinx_channel_e channel
+    );
+        pcie_tl_mem_tlp  mem_tlp;
+        tlp_category_e   cat;
+        int              exp_bytes;
+        bit              is_data;
+        bit              ch_proto_en;
+        int              tag_space;
+
+        if (cfg == null) return;  // 无配置时不检查（被动/单元场景安全退化）
+
+        cat     = tlp.get_category();
+        is_data = tlp.has_data();
+
+        //---------------------------------------------------------------------
+        // 检查 1：每通道协议方向合法性
+        // <ch>_protocol_check_enable -> TYPE: RQ_PROTO/RC_PROTO/CQ_PROTO/CC_PROTO
+        // RQ/CQ 承载请求（非完成）；RC/CC 承载完成
+        //---------------------------------------------------------------------
+        case (channel)
+            XILINX_CH_RQ: ch_proto_en = cfg.rq_protocol_check_enable;
+            XILINX_CH_RC: ch_proto_en = cfg.rc_protocol_check_enable;
+            XILINX_CH_CQ: ch_proto_en = cfg.cq_protocol_check_enable;
+            XILINX_CH_CC: ch_proto_en = cfg.cc_protocol_check_enable;
+            default:      ch_proto_en = 1'b0;
+        endcase
+
+        if (ch_proto_en) begin
+            case (channel)
+                XILINX_CH_RQ, XILINX_CH_CQ: begin
+                    // 请求通道：到达的 TLP 不得为完成类
+                    if (cat == TLP_CAT_COMPLETION) begin
+                        string ty = (channel == XILINX_CH_RQ) ? "RQ_PROTO" : "CQ_PROTO";
+                        `uvm_error(get_type_name(),
+                            $sformatf("%s 通道收到完成类 TLP（kind=%s），请求通道不应承载完成",
+                                channel.name(), tlp.kind.name()))
+                        publish_error(ty);
+                    end
+                end
+                XILINX_CH_RC, XILINX_CH_CC: begin
+                    // 完成通道：到达的 TLP 必须为完成类
+                    if (cat != TLP_CAT_COMPLETION) begin
+                        string ty = (channel == XILINX_CH_RC) ? "RC_PROTO" : "CC_PROTO";
+                        `uvm_error(get_type_name(),
+                            $sformatf("%s 通道收到非完成类 TLP（kind=%s），完成通道只应承载完成",
+                                channel.name(), tlp.kind.name()))
+                        publish_error(ty);
+                    end
+                end
+                default: ;
+            endcase
+        end
+
+        //---------------------------------------------------------------------
+        // 检查 2：描述符格式 - tag 落在配置的 tag 空间内
+        // desc_format_check_enable -> TYPE: DESC_FORMAT
+        // tag pool 上界 = min(max_outstanding, extended?1024:256)；分配 tag 恒 < 该界
+        //---------------------------------------------------------------------
+        if (cfg.desc_format_check_enable) begin
+            int hw_max = cfg.extended_tag_enable ? 1024 : 256;
+            tag_space  = (cfg.max_outstanding < hw_max) ? cfg.max_outstanding : hw_max;
+            if (int'(tlp.tag) >= tag_space) begin
+                `uvm_error(get_type_name(),
+                    $sformatf("%s DESC_FORMAT: tag=0x%03h 超出配置 tag 空间 [0,%0d)",
+                        channel.name(), tlp.tag, tag_space))
+                publish_error("DESC_FORMAT");
+            end
+        end
+
+        //---------------------------------------------------------------------
+        // 检查 3：tuser 一致性 - 写请求 first_be 必须非零
+        // tuser_consistency_check -> TYPE: TUSER
+        // 仅对 RQ/CQ 携带数据的请求（length>=1）检查；first_be 来自 tuser
+        // （由 apply_tuser_be 回写到 mem_tlp）。PG213：数据传输首 DW BE 不应全零。
+        //---------------------------------------------------------------------
+        if (cfg.tuser_consistency_check &&
+            (channel == XILINX_CH_RQ || channel == XILINX_CH_CQ) &&
+            is_data) begin
+            if ($cast(mem_tlp, tlp)) begin
+                if (mem_tlp.first_be == 4'h0) begin
+                    `uvm_error(get_type_name(),
+                        $sformatf("%s TUSER: 写请求 first_be=0（length=%0d, payload=%0d B），首 DW BE 不应全零",
+                            channel.name(), tlp.length, tlp.payload.size()))
+                    publish_error("TUSER");
+                end
+            end
+        end
+
+        //---------------------------------------------------------------------
+        // 检查 4：payload 对齐 - payload 字节数与 length 字段一致
+        // payload_alignment_check -> TYPE: PAYLOAD_ALIGN
+        // WITH_DATA: payload.size()==length*4（length==0 -> 4096B=1024DW）
+        // NO_DATA  : payload.size()==0
+        //---------------------------------------------------------------------
+        if (cfg.payload_alignment_check) begin
+            if (is_data) begin
+                exp_bytes = (tlp.length == 10'h0) ? 4096 : (int'(tlp.length) * 4);
+                if (tlp.payload.size() != exp_bytes) begin
+                    `uvm_error(get_type_name(),
+                        $sformatf("%s PAYLOAD_ALIGN: payload=%0d B 与 length=%0d DW（期望 %0d B）不符",
+                            channel.name(), tlp.payload.size(), tlp.length, exp_bytes))
+                    publish_error("PAYLOAD_ALIGN");
+                end
+            end else begin
+                if (tlp.payload.size() != 0) begin
+                    `uvm_error(get_type_name(),
+                        $sformatf("%s PAYLOAD_ALIGN: 无数据 TLP（fmt=%s）却带 %0d B payload",
+                            channel.name(), tlp.fmt.name(), tlp.payload.size()))
+                    publish_error("PAYLOAD_ALIGN");
+                end
+            end
+        end
+    endfunction : run_protocol_checks
 
     //=========================================================================
     // extract_tag_9_8：从首 beat 的 tuser 中提取 Tag 高 2 位
