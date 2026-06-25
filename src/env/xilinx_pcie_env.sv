@@ -40,11 +40,9 @@ class xilinx_pcie_env extends uvm_env;
     xilinx_pcie_agent rc_agent;   // 别名 = rc_agents[0]
     xilinx_pcie_agent ep_agent;   // 别名 = ep_agents[0]
 
-    // RC 侧中断 Agent（cfg_interrupt 驱动/监控）
-    xilinx_pcie_interrupt_agent         rc_int_agent;
-
-    // EP 侧中断 Agent（cfg_interrupt 驱动/监控）
-    xilinx_pcie_interrupt_agent         ep_int_agent;
+    // RC/EP 侧中断 Agent 数组（按 cfg.num_rc / cfg.num_ep 例化）
+    xilinx_pcie_interrupt_agent         rc_int_agents[$];
+    xilinx_pcie_interrupt_agent         ep_int_agents[$];
 
     // 虚拟 Sequencer：聚合 RC/EP sequencer
     xilinx_pcie_virtual_sequencer       v_sqr;
@@ -156,18 +154,22 @@ class xilinx_pcie_env extends uvm_env;
         // 同时将 int_agent 引用注册到 config_db，供 msi_seq 的 body() 获取
         // -----------------------------------------------------------------
         if (cfg.interrupt_enable) begin
-            // 创建 RC 侧中断 agent
-            rc_int_agent = xilinx_pcie_interrupt_agent::type_id::create(
-                "rc_int_agent", this);
+            // 按 num_rc/num_ep 例化为数组；实例名 rc_int_agent_%0d / ep_int_agent_%0d
+            // 与连接宏在 config_db 注册的索引路径（rc_int_agent_0* 等）匹配
+            for (int i = 0; i < cfg.num_rc; i++)
+                rc_int_agents.push_back(xilinx_pcie_interrupt_agent::type_id::create(
+                    $sformatf("rc_int_agent_%0d", i), this));
+            for (int i = 0; i < cfg.num_ep; i++)
+                ep_int_agents.push_back(xilinx_pcie_interrupt_agent::type_id::create(
+                    $sformatf("ep_int_agent_%0d", i), this));
 
-            // 创建 EP 侧中断 agent
-            ep_int_agent = xilinx_pcie_interrupt_agent::type_id::create(
-                "ep_int_agent", this);
-
-            // 将 ep_int_agent 注册到 config_db，key="int_agent"
-            // 路径使用通配符 "*"，使 msi_seq 从任意 sequencer 上下文都能获取
+            // 旧 key 兼容（msi_seq 用 "int_agent"），指向 ep_int_agents[0]
             uvm_config_db #(xilinx_pcie_interrupt_agent)::set(
-                this, "*", "int_agent", ep_int_agent);
+                this, "*", "int_agent", ep_int_agents[0]);
+            // 按索引 key（多 EP 时 msi_seq 可定向）
+            foreach (ep_int_agents[i])
+                uvm_config_db #(xilinx_pcie_interrupt_agent)::set(
+                    this, "*", $sformatf("int_agent_%0d", i), ep_int_agents[i]);
         end
 
         // -----------------------------------------------------------------
