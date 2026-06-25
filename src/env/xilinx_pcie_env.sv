@@ -53,6 +53,9 @@ class xilinx_pcie_env extends uvm_env;
     // 每 agent collector tap（RC + EP，各一个；build_phase 创建，connect_phase 连接）
     xilinx_pcie_collector_tap           taps[$];
 
+    // 每 agent error tap（RC + EP，各一个；转发 monitor 本地协议错误到 collector.record_error）
+    xilinx_pcie_error_tap               err_taps[$];
+
     // Coverage：功能覆盖率收集
     xilinx_pcie_coverage                cov;
 
@@ -205,6 +208,27 @@ class xilinx_pcie_env extends uvm_env;
                 tp.collector = scb;
                 taps.push_back(tp);
             end
+
+            // 每 agent error tap：与 collector tap 同序（先 RC，再 EP），
+            // 连接 monitor.err_ap，转发本地协议错误到 collector.record_error。
+            foreach (rc_agents[i]) begin
+                xilinx_pcie_error_tap et;
+                et = xilinx_pcie_error_tap::type_id::create(
+                    $sformatf("rc_err_tap_%0d", i), this);
+                et.agent_id  = i;
+                et.role      = XILINX_PCIE_RC;
+                et.collector = scb;
+                err_taps.push_back(et);
+            end
+            foreach (ep_agents[i]) begin
+                xilinx_pcie_error_tap et;
+                et = xilinx_pcie_error_tap::type_id::create(
+                    $sformatf("ep_err_tap_%0d", i), this);
+                et.agent_id  = i;
+                et.role      = XILINX_PCIE_EP;
+                et.collector = scb;
+                err_taps.push_back(et);
+            end
         end
 
         // -----------------------------------------------------------------
@@ -274,6 +298,20 @@ class xilinx_pcie_env extends uvm_env;
                 foreach (ep_agents[i]) begin
                     ep_agents[i].tlp_rx_ap.connect(taps[ti].analysis_export);
                     ti++;
+                end
+            end
+
+            // 将每个 agent 的 monitor 错误侧信道（err_ap）连接到对应 error tap。
+            // err_taps[] 创建顺序与此处一致（先 RC，再 EP）。
+            begin
+                int ei = 0;
+                foreach (rc_agents[i]) begin
+                    rc_agents[i].monitor.err_ap.connect(err_taps[ei].analysis_export);
+                    ei++;
+                end
+                foreach (ep_agents[i]) begin
+                    ep_agents[i].monitor.err_ap.connect(err_taps[ei].analysis_export);
+                    ei++;
                 end
             end
         end

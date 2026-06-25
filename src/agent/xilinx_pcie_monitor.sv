@@ -46,6 +46,10 @@ class xilinx_pcie_monitor extends uvm_component;
     // TLP 接收分析端口：每解码一个 TLP 后广播
     uvm_analysis_port #(pcie_tl_tlp) tlp_rx_ap;
 
+    // 错误侧信道：每触发一次本地协议检查（malformed 等）即广播一个
+    // xilinx_pcie_error_item，经 env 的 per-agent error tap 转发到中央 collector。
+    uvm_analysis_port #(xilinx_pcie_error_item) err_ap;
+
     //=========================================================================
     // 成员变量（由父 agent 在 connect_phase 中设置）
     //=========================================================================
@@ -80,7 +84,21 @@ class xilinx_pcie_monitor extends uvm_component;
 
         // 创建 TLP 接收分析端口
         tlp_rx_ap = new("tlp_rx_ap", this);
+
+        // 创建错误侧信道端口
+        err_ap = new("err_ap", this);
     endfunction : build_phase
+
+    //=========================================================================
+    // publish_error：构造 error_item 并经 err_ap 发布到中央 collector
+    // 在每个本地协议检查 uvm_error 现场调用（与该处 uvm_error 并存，不替代）
+    //=========================================================================
+    protected function void publish_error(string err_type);
+        xilinx_pcie_error_item it;
+        it = xilinx_pcie_error_item::type_id::create("err_item");
+        it.err_type = err_type;
+        err_ap.write(it);
+    endfunction : publish_error
 
     //=========================================================================
     // write_rq：RQ 通道回调 - 解码 RQ axis_packet 为 pcie_tl_tlp
@@ -157,7 +175,10 @@ class xilinx_pcie_monitor extends uvm_component;
         // 步骤 1：从 axis_packet.beats 收集 tdata, tkeep, tuser
         // -----------------------------------------------------------------
         if (pkt.beats.size() == 0) begin
-            `uvm_warning(get_type_name(), "decode_packet: 收到空的 axis_packet，跳过")
+            // 本地协议检查：空 axis_packet 属 malformed（axis_monitor 正常流量
+            // 始终至少含 1 个 beat，故 clean run 永不触发；仅注入时出现）。
+            `uvm_error(get_type_name(), "decode_packet: 收到空的 axis_packet（malformed）")
+            publish_error("MALFORMED");
             return null;
         end
 
@@ -215,6 +236,7 @@ class xilinx_pcie_monitor extends uvm_component;
             default: begin
                 `uvm_error(get_type_name(),
                     $sformatf("decode_packet: 未知通道 %s", channel.name()))
+                publish_error("MALFORMED");
                 return null;
             end
         endcase

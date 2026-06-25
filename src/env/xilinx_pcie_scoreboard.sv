@@ -66,6 +66,16 @@ class xilinx_pcie_scoreboard extends uvm_scoreboard;
     endfunction : record
 
     //=========================================================================
+    // record_error：error tap 转发回调，按 agent 累加本地协议错误类型
+    //   由各 agent monitor 的本地协议检查（malformed 等）经 err_ap -> err_tap
+    //   触发。与 record() 的 poisoned 路径并存，共同填充 err_count。
+    //=========================================================================
+    function void record_error(int agent_id, xilinx_pcie_role_e role, string err_type);
+        string ak = $sformatf("%s_%0d", role.name(), agent_id);
+        err_count[ak][err_type]++;
+    endfunction : record_error
+
+    //=========================================================================
     // report_phase：输出协议类型直方图；对任何错误类型报 uvm_error
     //=========================================================================
     function void report_phase(uvm_phase phase);

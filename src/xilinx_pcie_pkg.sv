@@ -51,6 +51,10 @@ package xilinx_pcie_pkg;
     // PCIe TLP Driver：将 pcie_tl_tlp 编码为 AXI-Stream beat 序列并发送（11 步流水线）
     `include "agent/xilinx_pcie_driver.sv"
 
+    // 错误聚合载体：monitor 本地协议检查触发时构造，经 err_ap/err_tap 转发到 collector
+    // （须在 monitor 之前，monitor 引用其类型）
+    `include "env/xilinx_pcie_error_item.sv"
+
     // PCIe TLP Monitor：监听 4 个 axis_agent 输出，将 AXI-Stream 包解码回 pcie_tl_tlp
     `include "agent/xilinx_pcie_monitor.sv"
 
@@ -71,6 +75,9 @@ package xilinx_pcie_pkg;
 
     // 每 agent collector tap：转发 monitor TLP 输出到 collector（须在 scoreboard 之后，引用其类型）
     `include "env/xilinx_pcie_collector_tap.sv"
+
+    // 每 agent error tap：转发 monitor 本地协议错误到 collector.record_error（scoreboard 之后）
+    `include "env/xilinx_pcie_error_tap.sv"
 
     // Coverage：6 个 covergroup 采样 TLP 功能覆盖率
     `include "env/xilinx_pcie_coverage.sv"

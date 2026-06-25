@@ -74,3 +74,4 @@
 /home/ubuntu/ryan/xilinx_pcie/tests/xilinx_pcie_mega_stress_test.sv
 /home/ubuntu/ryan/xilinx_pcie/tests/xilinx_pcie_unified_mem_test.sv
 /home/ubuntu/ryan/xilinx_pcie/tests/xilinx_pcie_multi_agent_test.sv
+/home/ubuntu/ryan/xilinx_pcie/tests/xilinx_pcie_err_inject_test.sv
