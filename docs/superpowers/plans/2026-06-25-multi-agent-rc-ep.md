@@ -1,6 +1,6 @@
 # 可配置多 RC/EP Agent 实现计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** 让 `xilinx_pcie` 环境运行期可配 N 个 RC + M 个 EP agent，连线用宏由用户在 tb 里逐 agent 连，检查只做协议类型+错误类型，默认 1+1 向后兼容。
 
@@ -74,7 +74,7 @@ ssh -p 2222 ryan@10.11.10.61 'source ~/set-env.sh >/dev/null 2>&1
 **Files:**
 - Modify: `src/env/xilinx_pcie_env_config.sv`（字段区 ~19-29 行附近；`do_copy` ~320；`validate` ~435）
 
-- [ ] **Step 1: 加字段**（在 `role` 字段后）
+- [x] **Step 1: 加字段**（在 `role` 字段后）
 
 ```systemverilog
     // ---- 多 agent 数量（运行期，默认 1 保持向后兼容） ----
@@ -82,14 +82,14 @@ ssh -p 2222 ryan@10.11.10.61 'source ~/set-env.sh >/dev/null 2>&1
     int                         num_ep = 1;   // EP agent 数量
 ```
 
-- [ ] **Step 2: do_copy 同步**（在 `do_copy` 里 `this.role = o.role;` 之后加）
+- [x] **Step 2: do_copy 同步**（在 `do_copy` 里 `this.role = o.role;` 之后加）
 
 ```systemverilog
         this.num_rc = o.num_rc;
         this.num_ep = o.num_ep;
 ```
 
-- [ ] **Step 3: validate 加约束**（在 `validate()` 内、`return 1` 前加）
+- [x] **Step 3: validate 加约束**（在 `validate()` 内、`return 1` 前加）
 
 ```systemverilog
         if (num_rc < 0 || num_ep < 0 || (num_rc + num_ep) < 1) begin
@@ -98,9 +98,9 @@ ssh -p 2222 ryan@10.11.10.61 'source ~/set-env.sh >/dev/null 2>&1
         end
 ```
 
-- [ ] **Step 4: BUILD+RUN sanity**（默认 1+1，行为不变）。先 rsync 改文件。Expected: `vcs rc=0`，`UVM_ERROR : 0`。
+- [x] **Step 4: BUILD+RUN sanity**（默认 1+1，行为不变）。先 rsync 改文件。Expected: `vcs rc=0`，`UVM_ERROR : 0`。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 ```bash
 git add src/env/xilinx_pcie_env_config.sv
 git commit -m "feat(xilinx-pcie): add num_rc/num_ep config (default 1)"
@@ -113,7 +113,7 @@ git commit -m "feat(xilinx-pcie): add num_rc/num_ep config (default 1)"
 **Files:**
 - Create: `tb/xilinx_pcie_connect.svh`
 
-- [ ] **Step 1: 写 connect.svh**（tkeep 函数 + 两宏）。完整内容：
+- [x] **Step 1: 写 connect.svh**（tkeep 函数 + 两宏）。完整内容：
 
 ```systemverilog
 `ifndef XILINX_PCIE_CONNECT_SVH
@@ -197,7 +197,7 @@ endfunction
 `endif
 ```
 
-- [ ] **Step 2:** 不单独编译（宏未被调用，下个任务起用）。直接 Commit。
+- [x] **Step 2:** 不单独编译（宏未被调用，下个任务起用）。直接 Commit。
 ```bash
 git add tb/xilinx_pcie_connect.svh
 git commit -m "feat(xilinx-pcie): add WIRE_RC/WIRE_EP connect macros"
@@ -216,7 +216,7 @@ git commit -m "feat(xilinx-pcie): add WIRE_RC/WIRE_EP connect macros"
 - Modify: `tb/tb_top.sv`（接线区 93-205；config_db 区 224-243）
 - Modify: `sim/filelist.f`（加 `+incdir+/home/ubuntu/ryan/xilinx_pcie/tb`）
 
-- [ ] **Step 1: env 声明数组 + 别名**（替换 `rc_agent`/`ep_agent` 声明）
+- [x] **Step 1: env 声明数组 + 别名**（替换 `rc_agent`/`ep_agent` 声明）
 ```systemverilog
     xilinx_pcie_agent rc_agents[$];
     xilinx_pcie_agent ep_agents[$];
@@ -225,7 +225,7 @@ git commit -m "feat(xilinx-pcie): add WIRE_RC/WIRE_EP connect macros"
     xilinx_pcie_agent ep_agent;   // = ep_agents[0]
 ```
 
-- [ ] **Step 2: build_phase 循环建 agent**（替换原步骤2/3/4 的 clone+set+create）
+- [x] **Step 2: build_phase 循环建 agent**（替换原步骤2/3/4 的 clone+set+create）
 ```systemverilog
     for (int i = 0; i < cfg.num_rc; i++) begin
       xilinx_pcie_env_config c; xilinx_pcie_agent a;
@@ -246,9 +246,9 @@ git commit -m "feat(xilinx-pcie): add WIRE_RC/WIRE_EP connect macros"
 ```
 （统一内存 step3b 的 `rc_agent*`/`ep_agent*` config_db set 路径改为对每个 i 循环 set `rc_agent_%0d*`/`ep_agent_%0d*`。）
 
-- [ ] **Step 3: connect_phase 引用改别名**：`rc_agent.tag_mgr` 等保持（别名已指向 [0]）。逐 agent 接 v_sqr 在 Task 4 完成；本任务先保证 [0] 路径如旧。
+- [x] **Step 3: connect_phase 引用改别名**：`rc_agent.tag_mgr` 等保持（别名已指向 [0]）。逐 agent 接 v_sqr 在 Task 4 完成；本任务先保证 [0] 路径如旧。
 
-- [ ] **Step 4: tb_top 用宏**：删 93-205 的 8 路 axis_if 显式例化+桥接，及 224-243 的 axis config_db set；在 `rc_if/ep_if/rc_cfg_if/ep_cfg_if` 与 loopback_dut 之后插入：
+- [x] **Step 4: tb_top 用宏**：删 93-205 的 8 路 axis_if 显式例化+桥接，及 224-243 的 axis config_db set；在 `rc_if/ep_if/rc_cfg_if/ep_cfg_if` 与 loopback_dut 之后插入：
 ```systemverilog
 `include "xilinx_pcie_connect.svh"
 // rc_if/ep_if/rc_cfg_if/ep_cfg_if + loopback_dut 保持
@@ -257,14 +257,14 @@ git commit -m "feat(xilinx-pcie): add WIRE_RC/WIRE_EP connect macros"
 ```
 （cfg_if 的 config_db set 由宏接管；host_mem set 与 run_test 不动。）
 
-- [ ] **Step 5: filelist 加 incdir**
+- [x] **Step 5: filelist 加 incdir**
 ```
 +incdir+/home/ubuntu/ryan/xilinx_pcie/tb
 ```
 
-- [ ] **Step 6: BUILD+RUN sanity + loopback**。Expected: `vcs rc=0`，两 test `UVM_ERROR : 0`。若取不到 vif → 检查宏路径 `rc_agent_0` 与 env 实例名一致。
+- [x] **Step 6: BUILD+RUN sanity + loopback**。Expected: `vcs rc=0`，两 test `UVM_ERROR : 0`。若取不到 vif → 检查宏路径 `rc_agent_0` 与 env 实例名一致。
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 ```bash
 git add src/env/xilinx_pcie_env.sv tb/tb_top.sv sim/filelist.f
 git commit -m "feat(xilinx-pcie): array-ize RC/EP agents; tb_top uses WIRE macros"
@@ -278,7 +278,7 @@ git commit -m "feat(xilinx-pcie): array-ize RC/EP agents; tb_top uses WIRE macro
 - Modify: `src/env/xilinx_pcie_virtual_sequencer.sv`（rc_sqr/ep_sqr 声明）
 - Modify: `src/env/xilinx_pcie_env.sv`（connect_phase 接 sqr）
 
-- [ ] **Step 1: v_sqr 加数组 + 别名**
+- [x] **Step 1: v_sqr 加数组 + 别名**
 ```systemverilog
     uvm_sequencer #(pcie_tl_tlp) rc_sqr_arr[$];
     uvm_sequencer #(pcie_tl_tlp) ep_sqr_arr[$];
@@ -286,7 +286,7 @@ git commit -m "feat(xilinx-pcie): array-ize RC/EP agents; tb_top uses WIRE macro
     uvm_sequencer #(pcie_tl_tlp) ep_sqr;   // = ep_sqr_arr[0]
 ```
 
-- [ ] **Step 2: env connect_phase 填数组**（在设置 v_sqr 引用处）
+- [x] **Step 2: env connect_phase 填数组**（在设置 v_sqr 引用处）
 ```systemverilog
     foreach (rc_agents[i]) v_sqr.rc_sqr_arr.push_back(rc_agents[i].tlp_sqr);
     foreach (ep_agents[i]) v_sqr.ep_sqr_arr.push_back(ep_agents[i].tlp_sqr);
@@ -295,9 +295,9 @@ git commit -m "feat(xilinx-pcie): array-ize RC/EP agents; tb_top uses WIRE macro
 ```
 > 注：`agent.tlp_sqr` 为 agent 内 TLP sequencer 句柄名 — 实现时读 `xilinx_pcie_agent.sv` 确认实际成员名，替换之。
 
-- [ ] **Step 3: BUILD+RUN sanity**。Expected: `UVM_ERROR : 0`（现 vseq 用别名 = [0]）。
+- [x] **Step 3: BUILD+RUN sanity**。Expected: `UVM_ERROR : 0`（现 vseq 用别名 = [0]）。
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 ```bash
 git add src/env/xilinx_pcie_virtual_sequencer.sv src/env/xilinx_pcie_env.sv
 git commit -m "feat(xilinx-pcie): array-ize virtual sequencer with [0] aliases"
@@ -313,7 +313,7 @@ git commit -m "feat(xilinx-pcie): array-ize virtual sequencer with [0] aliases"
 - Modify: `src/env/xilinx_pcie_env.sv`（每 agent monitor → tap → scb）
 - Modify: `src/xilinx_pcie_pkg.sv`、`sim/filelist.f`（include tap）
 
-- [ ] **Step 1: 写 tap**（`src/env/xilinx_pcie_collector_tap.sv`）
+- [x] **Step 1: 写 tap**（`src/env/xilinx_pcie_collector_tap.sv`）
 ```systemverilog
 class xilinx_pcie_collector_tap extends uvm_subscriber #(pcie_tl_tlp);
   `uvm_component_utils(xilinx_pcie_collector_tap)
@@ -326,7 +326,7 @@ endclass
 ```
 （在 `xilinx_pcie_pkg.sv` 的 scoreboard include 后加 `` `include "xilinx_pcie_collector_tap.sv" ``。）
 
-- [ ] **Step 2: scoreboard 改造**：删 `rc_tx_imp`/`rc_rx_imp`/`ep_tx_imp`/`ep_rx_imp` 与数据配对；加：
+- [x] **Step 2: scoreboard 改造**：删 `rc_tx_imp`/`rc_rx_imp`/`ep_tx_imp`/`ep_rx_imp` 与数据配对；加：
 ```systemverilog
   protected int unsigned proto_count[string][string];   // [agent_key][tlp_type]
   protected int unsigned err_count[string][string];     // [agent_key][err_type]
@@ -346,7 +346,7 @@ endclass
 ```
 > `get_tlp_type_name()`/`has_error()`/`get_error_name()` 为示意 — 实现时读 `pcie_tl_tlp` 类，用其实际类型枚举/错误字段替换。`scb_data_integrity`/`scb_completion_check` 字段保留不用（no-op）。
 
-- [ ] **Step 3: env 接 tap**（connect_phase，每 agent monitor TLP analysis port → 独立 tap → scb，tap 存数组防 GC）
+- [x] **Step 3: env 接 tap**（connect_phase，每 agent monitor TLP analysis port → 独立 tap → scb，tap 存数组防 GC）
 ```systemverilog
     if (cfg.scb_enable) begin
       foreach (rc_agents[i]) begin
@@ -363,9 +363,9 @@ endclass
 ```
 （env 加成员 `xilinx_pcie_collector_tap taps[$];`。`tlp_mon_ap` 名读 monitor 确认。）
 
-- [ ] **Step 4: BUILD+RUN sanity + loopback + stress**。Expected: `UVM_ERROR : 0`（无数据配对误报），report 出 PROTO 直方图。
+- [x] **Step 4: BUILD+RUN sanity + loopback + stress**。Expected: `UVM_ERROR : 0`（无数据配对误报），report 出 PROTO 直方图。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 ```bash
 git add src/env/xilinx_pcie_collector_tap.sv src/env/xilinx_pcie_scoreboard.sv src/env/xilinx_pcie_env.sv src/xilinx_pcie_pkg.sv sim/filelist.f
 git commit -m "feat(xilinx-pcie): protocol/error collector via per-agent taps (drop data pairing)"
@@ -378,13 +378,13 @@ git commit -m "feat(xilinx-pcie): protocol/error collector via per-agent taps (d
 **Files:**
 - Modify: `src/env/xilinx_pcie_env.sv`（int agent 数组化）
 
-- [ ] **Step 1: 声明数组**
+- [x] **Step 1: 声明数组**
 ```systemverilog
     xilinx_pcie_interrupt_agent rc_int_agents[$];
     xilinx_pcie_interrupt_agent ep_int_agents[$];
 ```
 
-- [ ] **Step 2: build_phase 循环建**（替换原 rc_int_agent/ep_int_agent 单建，`interrupt_enable` 内）
+- [x] **Step 2: build_phase 循环建**（替换原 rc_int_agent/ep_int_agent 单建，`interrupt_enable` 内）
 ```systemverilog
     if (cfg.interrupt_enable) begin
       for (int i=0;i<cfg.num_rc;i++) rc_int_agents.push_back(
@@ -397,9 +397,9 @@ git commit -m "feat(xilinx-pcie): protocol/error collector via per-agent taps (d
     end
 ```
 
-- [ ] **Step 3: BUILD+RUN sanity（interrupt_enable=1 默认）**。Expected: `UVM_ERROR : 0`，MSI 阶段正常。
+- [x] **Step 3: BUILD+RUN sanity（interrupt_enable=1 默认）**。Expected: `UVM_ERROR : 0`，MSI 阶段正常。
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 ```bash
 git add src/env/xilinx_pcie_env.sv
 git commit -m "feat(xilinx-pcie): scale interrupt agents per RC/EP count"
@@ -414,7 +414,7 @@ git commit -m "feat(xilinx-pcie): scale interrupt agents per RC/EP count"
 - Create: `tests/xilinx_pcie_multi_agent_test.sv`
 - Create: `sim/filelist_multi.f`（顶层换 tb_multi_agent + 加新 test）
 
-- [ ] **Step 1: 写 demo tb**（`tb/tb_multi_agent.sv`）：clk/rst 同 tb_top；声明 1 个 RC + 3 个 EP 的 `xilinx_pcie_if` + `xilinx_pcie_cfg_if`（各 PCIE_IF 不接 DUT，tready 由 axis 侧驱，未连端口悬空）；调用：
+- [x] **Step 1: 写 demo tb**（`tb/tb_multi_agent.sv`）：clk/rst 同 tb_top；声明 1 个 RC + 3 个 EP 的 `xilinx_pcie_if` + `xilinx_pcie_cfg_if`（各 PCIE_IF 不接 DUT，tready 由 axis 侧驱，未连端口悬空）；调用：
 ```systemverilog
 `include "xilinx_pcie_connect.svh"
 `XILINX_PCIE_WIRE_RC(0, rc_if,  rc_cfg_if,  clk, rst_n)
@@ -424,7 +424,7 @@ git commit -m "feat(xilinx-pcie): scale interrupt agents per RC/EP count"
 // host_mem set + run_test 同 tb_top
 ```
 
-- [ ] **Step 2: 写 test**（`tests/xilinx_pcie_multi_agent_test.sv`）
+- [x] **Step 2: 写 test**（`tests/xilinx_pcie_multi_agent_test.sv`）
 ```systemverilog
 class xilinx_pcie_multi_agent_test extends xilinx_pcie_base_test;
   `uvm_component_utils(xilinx_pcie_multi_agent_test)
@@ -448,11 +448,11 @@ endclass
 ```
 > base_test 暴露 cfg 的方式读 `xilinx_pcie_base_test.sv` 确认；`xilinx_pcie_mem_seq` 字段按实际。
 
-- [ ] **Step 3: filelist_multi.f**：复制 filelist.f，把 `tb/tb_top.sv` 换 `tb/tb_multi_agent.sv`，加 `tests/xilinx_pcie_multi_agent_test.sv`。BUILD（`-f filelist_multi.f`）+RUN multi_agent_test。Expected: `vcs rc=0`，4 agent 建成，`UVM_ERROR : 0`，report 见 `[EP_0]/[EP_1]/[EP_2]` proto 计数。
+- [x] **Step 3: filelist_multi.f**：复制 filelist.f，把 `tb/tb_top.sv` 换 `tb/tb_multi_agent.sv`，加 `tests/xilinx_pcie_multi_agent_test.sv`。BUILD（`-f filelist_multi.f`）+RUN multi_agent_test。Expected: `vcs rc=0`，4 agent 建成，`UVM_ERROR : 0`，report 见 `[EP_0]/[EP_1]/[EP_2]` proto 计数。
 
-- [ ] **Step 4: 回归不回退**：用 `filelist.f`（tb_top）跑现 7 个 test，全 `UVM_ERROR : 0`。
+- [x] **Step 4: 回归不回退**：用 `filelist.f`（tb_top）跑现 7 个 test，全 `UVM_ERROR : 0`。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 ```bash
 git add tb/tb_multi_agent.sv tests/xilinx_pcie_multi_agent_test.sv sim/filelist_multi.f
 git commit -m "test(xilinx-pcie): multi-agent demo tb + 1RC+3EP test"
@@ -465,11 +465,19 @@ git commit -m "test(xilinx-pcie): multi-agent demo tb + 1RC+3EP test"
 **Files:**
 - Modify: `docs/integration_guide.md`（加"多 agent 配置 + 连线宏"节）
 
-- [ ] **Step 1: integration_guide 加节**：`num_rc/num_ep` 用法、`WIRE_RC/WIRE_EP` 宏签名与契约、collector 报表说明、多 agent demo 指向 `tb_multi_agent.sv`。
+- [x] **Step 1: integration_guide 加节**：`num_rc/num_ep` 用法、`WIRE_RC/WIRE_EP` 宏签名与契约、collector 报表说明、多 agent demo 指向 `tb_multi_agent.sv`。
 
-- [ ] **Step 2: 全回归矩阵**（61）：DATA_WIDTH ∈ {256,512} × {现 7 test（tb_top）, multi_agent_test（tb_multi_agent）}，全 `UVM_ERROR=0/UVM_FATAL=0`。记录结果。
+- [x] **Step 2: 全回归矩阵**（61）：DATA_WIDTH ∈ {256,512} × {现 7 test（tb_top）, multi_agent_test（tb_multi_agent）}，全 `UVM_ERROR=0/UVM_FATAL=0`。记录结果。
 
-- [ ] **Step 3: Commit**
+  **回归结果（2026-06-26，远程 10.11.10.61 /tmp/xbuild，4 个 TB simv × DW∈{256,512}，seed=1，STRADDLE_EN=0）：**
+  - 4 个 filelist（filelist / _multi / _rc_multi_ep / _allep）在 DW=256 与 DW=512 均 `vcs rc=0`。
+  - 12 个 test × 2 宽度 = **24/24 通过**：
+    - 10 个功能 test（sanity, straddle, loopback, stress, mega_stress, unified_mem, multi_agent, multi_ep, rc_multi_ep, allep）均 `UVM_ERROR=0 / UVM_FATAL=0`。
+    - 2 个注入 test 按设计产错（PASS 判据非 UVM_ERROR==0）：
+      - `err_inject`：16 UVM_ERROR（每注入 1 个 monitor 本地错误）/ 0 FATAL — 符合设计。
+      - `errtype`：17 UVM_ERROR / 0 FATAL，`check_phase` 断言全 OK，打印 `ERRTYPE TEST PASSED — 各错误类型均被正确识别、归属正确、互不串扰`（9 类型 RC_0 各计 1，EP_0/1/2 隔离为 0）。
+
+- [x] **Step 3: Commit**
 ```bash
 git add docs/integration_guide.md
 git commit -m "docs(xilinx-pcie): document multi-agent config + connect macros"
