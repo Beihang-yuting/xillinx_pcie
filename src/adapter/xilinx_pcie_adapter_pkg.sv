@@ -7,6 +7,13 @@ package xilinx_pcie_adapter_pkg;
   `include "uvm_macros.svh"
   `include "xilinx_pcie_params.svh"
 
+  // ---- TB quiescence flag ----
+  // Cleared(=1) by the adapter's extract_phase once the UVM run_phase has
+  // ended; the adapter-mode testbench gates its free-running clock generator on
+  // this so no clocked axis driver/monitor threads advance (and flood the log)
+  // after simulation work is done. The tb timeout guard is only a backstop.
+  bit g_xilinx_adapter_quiesce = 0;
+
   // ---- Per-channel parameterized axis_agent typedefs (PG213 widths) ----
   typedef axis_agent#(`XILINX_DATA_W,4,4,`XILINX_RQ_TUSER_W,0,1,1) axis_agent_rq_t;
   typedef axis_agent#(`XILINX_DATA_W,4,4,`XILINX_RC_TUSER_W,0,1,1) axis_agent_rc_t;

@@ -52,6 +52,14 @@ class xilinx_pcie_if_adapter extends pcie_tl_if_adapter;
     // so DATA_WIDTH must match XILINX_DATA_W).
     int                         DATA_WIDTH = `XILINX_DATA_W;
 
+    // Straddle mode enable, sampled once from the +STRADDLE_EN runtime plusarg
+    // in build_phase (default 0). Wires the straddle engine so straddle actually
+    // engages instead of being hardcoded off.
+    int                         STRADDLE_EN = 0;
+
+    // rx_queue depth above which a backpressure warning is issued (drain stall)
+    localparam int              RX_QUEUE_WARN_DEPTH = 64;
+
     // codecs / router (no env_config dependency)
     xilinx_tuser_codec          tuser_codec;
     xilinx_straddle_engine      straddle_eng;
@@ -88,13 +96,16 @@ class xilinx_pcie_if_adapter extends pcie_tl_if_adapter;
         role = (nm.len() >= 2 && nm.substr(0,1) == "rc") ? XILINX_PCIE_RC : XILINX_PCIE_EP;
         mode = SV_IF_MODE;   // base run_phase guarded by vif!=null (vif stays null)
 
+        // straddle enable from +STRADDLE_EN plusarg (sampled once, default off)
+        void'($value$plusargs("STRADDLE_EN=%d", STRADDLE_EN));
+
         `uvm_info(get_type_name(),
-            $sformatf("ADAPTER build: name=%s type=%s role=%s DATA_WIDTH=%0d",
-                nm, get_type_name(), role.name(), DATA_WIDTH), UVM_LOW)
+            $sformatf("ADAPTER build: name=%s type=%s role=%s DATA_WIDTH=%0d STRADDLE_EN=%0d",
+                nm, get_type_name(), role.name(), DATA_WIDTH, STRADDLE_EN), UVM_LOW)
 
         // codecs / router
         tuser_codec  = new(DATA_WIDTH);
-        straddle_eng = new(1'b0, DATA_WIDTH);   // straddle disabled for PoC
+        straddle_eng = new((STRADDLE_EN != 0), DATA_WIDTH);   // straddle from plusarg
         router       = new(role);
 
         // create 4 axis_agents, each with its replicated axis_config
@@ -154,6 +165,16 @@ class xilinx_pcie_if_adapter extends pcie_tl_if_adapter;
             cq_agent.mon.packet_ap.connect(cq_imp);
             rc_agent.mon.packet_ap.connect(rc_imp);
         end
+    endfunction
+
+    //=========================================================================
+    // extract_phase: signal the tb clock generator to stop. Runs once the UVM
+    // run_phase has ended (objections dropped), halting the free-running clock
+    // so no clocked axis threads keep flooding the log post-verdict.
+    //=========================================================================
+    function void extract_phase(uvm_phase phase);
+        super.extract_phase(phase);
+        g_xilinx_adapter_quiesce = 1'b1;
     endfunction
 
     //=========================================================================
@@ -220,6 +241,10 @@ class xilinx_pcie_if_adapter extends pcie_tl_if_adapter;
                 $sformatf("rx %s: %s tag=0x%03h payload=%0dB (rx_queue=%0d)",
                     ch.name(), tlp.kind.name(), tlp.tag, tlp.payload.size(),
                     rx_queue.size()), UVM_MEDIUM)
+            if (rx_queue.size() > RX_QUEUE_WARN_DEPTH)
+                `uvm_warning(get_type_name(),
+                    $sformatf("rx_queue depth %0d exceeds %0d on %s — receive() draining too slowly",
+                        rx_queue.size(), RX_QUEUE_WARN_DEPTH, role.name()))
         end
     endfunction
 

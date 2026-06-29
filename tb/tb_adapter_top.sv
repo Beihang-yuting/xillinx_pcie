@@ -16,10 +16,13 @@ import xilinx_pcie_adapter_pkg::*;
 module tb_adapter_top;
 
   // Clock / reset (250 MHz, active-low reset)
+  // The clock is gated on the adapter quiescence flag so it halts as soon as the
+  // UVM run_phase ends (extract_phase sets it), preventing post-verdict clocked
+  // axis driver/monitor threads from flooding the log.
   logic clk;
   logic rst_n;
   initial clk = 1'b0;
-  always #2ns clk = ~clk;
+  always #2ns if (!xilinx_pcie_adapter_pkg::g_xilinx_adapter_quiesce) clk = ~clk;
   initial begin
     rst_n = 1'b0;
     repeat (10) @(posedge clk);
