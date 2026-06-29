@@ -92,8 +92,15 @@ class xilinx_pcie_if_adapter extends pcie_tl_if_adapter;
         string nm = get_name();
         super.build_phase(phase);
 
-        // role from instance name
-        role = (nm.len() >= 2 && nm.substr(0,1) == "rc") ? XILINX_PCIE_RC : XILINX_PCIE_EP;
+        // role from instance name (upstream pcie_tl_env names these
+        // "rc_adapter" / "ep_adapter" / "ep_adapter_<n>")
+        if (nm.len() >= 10 && nm.substr(0,9) == "rc_adapter")
+            role = XILINX_PCIE_RC;
+        else if (nm.len() >= 10 && nm.substr(0,9) == "ep_adapter")
+            role = XILINX_PCIE_EP;
+        else
+            `uvm_fatal(get_type_name(),
+                $sformatf("cannot derive RC/EP role from adapter instance name '%s' (expected rc_adapter*/ep_adapter*)", nm))
         mode = SV_IF_MODE;   // base run_phase guarded by vif!=null (vif stays null)
 
         // straddle enable from +STRADDLE_EN plusarg (sampled once, default off)
@@ -309,20 +316,13 @@ class xilinx_pcie_if_adapter extends pcie_tl_if_adapter;
             endcase
         end
         c.is_active = UVM_ACTIVE;
-        // default bandwidth: MASTER drives valid (zero idle), SLAVE always-ready
-        if (c.agent_mode == AXIS_MASTER) begin
-            c.valid_gen_mode = VALID_ZERO_IDLE;
-            c.idle_cycles    = 0;
-            c.valid_weight   = 100;
-            c.ready_gen_mode = READY_ALWAYS;
-            c.ready_weight   = 100;
-        end else begin
-            c.ready_gen_mode = READY_ALWAYS;
-            c.ready_weight   = 100;
-            c.valid_gen_mode = VALID_ZERO_IDLE;
-            c.idle_cycles    = 0;
-            c.valid_weight   = 100;
-        end
+        // default bandwidth: drive valid with zero idle, always ready
+        // (identical for MASTER and SLAVE; master/slave distinction is agent_mode above)
+        c.valid_gen_mode = VALID_ZERO_IDLE;
+        c.idle_cycles    = 0;
+        c.valid_weight   = 100;
+        c.ready_gen_mode = READY_ALWAYS;
+        c.ready_weight   = 100;
         return c;
     endfunction
 
@@ -338,7 +338,8 @@ class xilinx_pcie_if_adapter extends pcie_tl_if_adapter;
                 bit [95:0] d96 = xilinx_desc_codec::encode_rc(tlp);
                 desc = {32'h0, d96};
             end
-            XILINX_CH_CQ: desc = xilinx_desc_codec::encode_cq(tlp, 3'h0, 6'h0, 8'h0);
+            XILINX_CH_CQ: desc = xilinx_desc_codec::encode_cq(
+                              tlp, .bar_id(3'h0), .bar_aperture(6'h0), .target_func(8'h0));
             XILINX_CH_CC: begin
                 bit [95:0] d96 = xilinx_desc_codec::encode_cc(tlp);
                 desc = {32'h0, d96};
