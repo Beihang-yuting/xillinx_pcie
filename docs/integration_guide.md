@@ -1,459 +1,245 @@
-# Xilinx PCIe TL-Layer BFM 集成与使用指南
+# Xilinx PCIe 接口 Adapter 集成与使用指南
 
-本文档说明如何把 `xilinx_pcie` BFM 集成进仿真环境并使用：依赖与构建链、编译期参数、8 通道接线与角色、`env_config` 配置、运行测试、自写 test/vseq、连接真实 Xilinx PCIe IP、复位接线注意点，以及已知陷阱。
+本文档说明如何把 `xilinx_pcie` 接入仿真环境并使用。**自 adapter 化重构起**，本项目已收敛为**纯 Xilinx 接口 adapter**：只负责 PG213 的 4 通道 AXI-Stream（RQ/RC/CQ/CC）⟷ 抽象 `pcie_tl_tlp` 的编解码与通道路由；所有协议逻辑（agent / driver / EP 自动响应 / completion 追踪 / seq 库 / scoreboard）全部委托外部 `pcie_tl_vip`。旧的多 agent / WIRE_RC-WIRE_EP / xilinx scoreboard 协议栈已删除。
 
-> 设计原理（codec / tuser / straddle / router / agent / scoreboard 内部实现）见
-> `docs/superpowers/specs/2026-04-27-xilinx-pcie-bfm-design.md`。本文只讲**怎么用**。
+> 设计原理（adapter 子类吸收、codec / tuser / straddle、SV_IF 模式、与 pcie_tl_vip 的接缝）见
+> `docs/superpowers/specs/2026-06-29-xilinx-adapter-mode-design.md` 与实现计划
+> `docs/superpowers/plans/2026-06-29-xilinx-adapter-mode.md`。本文只讲**怎么用**。
 
 ---
 
 ## 目录
 
-1. [架构：组合复用三方 VIP](#1-架构组合复用三方-vip)
-2. [依赖与构建链（含路径陷阱）](#2-依赖与构建链含路径陷阱)
-3. [编译期参数](#3-编译期参数)
-4. [8 通道接线与角色](#4-8-通道接线与角色)
-5. [env_config 配置参考](#5-env_config-配置参考)
-6. [运行测试](#6-运行测试)
-7. [测试 / vseq / seq 库与自写 test](#7-测试--vseq--seq-库与自写-test)
-8. [连接真实 Xilinx PCIe IP](#8-连接真实-xilinx-pcie-ip)
-9. [复位接线注意点](#9-复位接线注意点)
-10. [已知陷阱](#10-已知陷阱)
-11. [多 agent 配置（可配 N RC + M EP）](#11-多-agent-配置可配-n-rc--m-ep)
+1. [架构](#1-架构)
+2. [接入用法](#2-接入用法)
+3. [激励与端到端校验](#3-激励与端到端校验)
+4. [构建与运行](#4-构建与运行)
+5. [依赖](#5-依赖)
+6. [已知限制（诚实记录）](#6-已知限制诚实记录)
+7. [回归矩阵](#7-回归矩阵)
 
 ---
 
-## 1. 架构：组合复用三方 VIP
+## 1. 架构
 
-`xilinx_pcie` 不自造底层，**组合复用**三个上游 VIP：
-
-| 上游 | 提供 | 在本项目的角色 |
-|------|------|----------------|
-| `axis_work/axis_vip` | AXI-Stream VIP（`axis_if` / `axis_agent` / driver / monitor / `axis_config`） | 每条 PCIe 通道的物理层激励/采样，8 个 `axis_agent` |
-| `pcie_work/pcie_tl_vip` | PCIe TL 层 TLP 类型、序列、`pcie_tl_pkg` | TLP 抽象、事务生成 |
-| `shm_work/host_mem` | 统一内存模型（`host_mem_manager` / `host_mem_api`） | 统一内存测试（`use_unified_mem=1` 时） |
-
-本项目自身实现：descriptor codec（RQ/RC/CQ/CC）、tuser codec、straddle 引擎、channel router、RC/EP agent、scoreboard、coverage、PCIe 序列库。
-
-数据通路：`pcie_tl_tlp` ⇄ descriptor codec ⇄ AXI-Stream beat（经 8 个 `axis_agent`）⇄ DUT。
-
----
-
-## 2. 依赖与构建链（含路径陷阱）
-
-### 编译文件顺序（`sim/filelist.f`）
-
-依赖必须**自底向上**编译，顺序固定：
+`xilinx_pcie` 的唯一职责是 Xilinx 帧 ⟷ `pcie_tl_tlp` 的双向转换。核心组件：
 
 ```
-1. axis_vip（经 -f 引用 lib-only filelist）
-   -f <axis_vip>/sim/filelist_lib.f      // 仅 axis_if + axis_pkg，无 tests/tb/SVA
-2. host_mem（统一内存模型）
-   +incdir <shm_work>/host_mem/src
-   <shm_work>/host_mem/src/host_mem_pkg.sv
-   <shm_work>/host_mem/src/host_mem_manager.sv
-3. pcie_tl_vip
-   +incdir <pcie_work>/pcie_tl_vip/src（及各子目录）
-   <pcie_work>/pcie_tl_vip/src/pcie_tl_if.sv     // 接口，包外
-   <pcie_work>/pcie_tl_vip/src/pcie_tl_pkg.sv
-4. xilinx_pcie（本项目）
-   +incdir <axis_vip>/src + 本项目各 src 子目录
-   src/interface/xilinx_pcie_if.sv               // 接口，包外，先于 pkg
-   src/interface/xilinx_pcie_cfg_if.sv
-   src/xilinx_pcie_pkg.sv                         // 顶层 package
-   tb/xilinx_pcie_loopback_dut.sv
-   tb/tb_top.sv                                   // 默认仿真顶层
-   tests/*.sv
+class xilinx_pcie_if_adapter extends pcie_tl_if_adapter
 ```
 
-四个项目缺一不可：`axis_work`、`pcie_work`、`shm_work`、`xilinx_pcie`。
+通过**工厂覆盖**装进上游 `pcie_tl_env`，替换其基类 adapter。一个 adapter 实例服务一个 pcie_tl agent（`rc_adapter` / `ep_adapter`），内部包 4 个 `axis_agent`（按 PG213 各通道 TUSER 宽度参数化），并吸收原 driver/monitor 的编解码逻辑：
 
-### ⚠️ 路径陷阱（务必读）
+- `send(tlp)`（override）：`router.get_tx_channel(tlp)` 选通道 → `encode_descriptor` + straddle 打包 + 逐 beat `encode_tuser_for_beat` → 经该通道 **MASTER** agent 的 sequencer 驱 AXIS（阻塞、串行）。
+- `receive(tlp)`（override）：**非阻塞** pop `rx_queue`（空返回 null）。
+- 4 个 axis monitor 的 `packet_ap` 回调 `decode_packet(pkt, ch)` → `pcie_tl_tlp` → `rx_queue.push_back`。**只连 SLAVE（接收方向）通道**，故 adapter 不会重摄自己发出的 TLP。
 
-**`filelist.f` 与 `filelist_lib.f` 里的路径是硬编码绝对路径**（`/home/ubuntu/ryan/...`）。换机器/换目录时：
+role 由实例名（`rc_adapter*` / `ep_adapter*`）判定，决定各通道 master/slave 方向（`make_axis_config`）：
 
-1. **逐机 sed**：`sed -i 's#/home/ubuntu/ryan#<新根>#g' xilinx_pcie/sim/filelist.f axis_work/axis_vip/sim/filelist_lib.f`。
-   - `filelist.f` 内**同时**引用 axis/shm/pcie/xilinx 四方绝对路径，且 `filelist_lib.f` 内部也有绝对路径，**两个文件都要 sed**。
-   - 若某机上的副本**已被前一次 sed 改成别的根**（如 `/home/ryan`），新一轮 relocate 时要 sed **两种** pattern（旧根 + 上一次的根），否则编译会**静默用错路径的源**。
+| role | MASTER（驱动 / send） | SLAVE（采样 / receive→rx_queue） |
+|---|---|---|
+| RC | RC（完成）、CQ（请求） | RQ（收到请求）、CC（收到完成） |
+| EP | RQ（请求）、CC（完成） | CQ（收到请求）、RC（收到完成） |
 
-2. **版本错位（高危）**：`filelist.f` 把 axis 解析到 `<根>/axis_work/axis_vip`。若该处是一份**过期副本**（非当前 git），编译会用旧 axis 而**不报错**——修复/改动静默丢失。集成或回归前务必确认 axis 副本是**最新版**（从 git 拉，或 rsync 覆盖）。
+### 数据流（端到端，1RC+1EP MRd 为例，参 spec §4.4）
 
-3. **盘满时的离线构建**：把 `{axis_work, pcie_work, shm_work, xilinx_pcie}` 镜像到一个可写根（保持目录名），rsync 最新 axis 覆盖，sed 两文件路径到该根，再编译。
+```
+RC seq → rc_agent.sequencer → base_driver.send_tlp(MRd)
+  → tag/ordering/FC → codec.encode(BW计数) → rc_adapter.send(MRd)
+  → router: MRd=request,RC → CQ 通道(MASTER) → desc/tuser/straddle 编码 → 驱 CQ AXIS
+        ↓ (物理总线 cq_bus: RC.cq_agent MASTER ↔ EP.cq_agent SLAVE)
+EP cq_agent.monitor → axis_packet → ep_adapter.cq_imp → decode_packet → pcie_tl_tlp(MRd) → ep rx_queue
+  → ep base_monitor.receive() pop → 协议检查 → tlp_ap → (pcie_tl_vip ep_driver 自动响应)
+  → ep_driver 生成 CplD → ep base_driver.send_tlp(CplD) → ep_adapter.send(CplD)
+  → router: CC 通道(MASTER) → 编码 → 驱 CC AXIS
+        ↓ (物理总线 cc_bus: EP.cc_agent MASTER ↔ RC.cc_agent SLAVE)
+RC cc_agent.monitor → axis_packet → rc_adapter.cc_imp → decode_packet → CplD → rc rx_queue
+  → rc base_monitor.receive() pop → pcie_tl_vip 释放 tag/outstanding
+```
 
----
-
-## 3. 编译期参数
-
-由 `+define+` 驱动，定义在 `src/xilinx_pcie_params.svh`：
-
-| 宏 | 默认 | 说明 |
-|----|------|------|
-| `DATA_WIDTH` | 256 | AXI-Stream 数据位宽，合法值 **64 / 128 / 256 / 512**，须与真实 PCIe IP 配置一致 |
-| `STRADDLE_EN` | 0 | straddle（跨 beat TLP 对齐）使能，**仅 DATA_WIDTH ≥ 256 有效** |
-
-各通道 TUSER 宽度由 `DATA_WIDTH` 自动推导（PG213）：
-
-| 通道 | DW=64/128 | DW=256 | DW=512 |
-|------|-----------|--------|--------|
-| RQ (`XILINX_RQ_TUSER_W`) | 62 | 137 | 285 |
-| RC (`XILINX_RC_TUSER_W`) | 75 | 161 | 321 |
-| CQ (`XILINX_CQ_TUSER_W`) | 88 | 183 | 375 |
-| CC (`XILINX_CC_TUSER_W`) | 33 | 81 | 161 |
-
-`XILINX_KEEP_W = DATA_WIDTH/32`（PCIe tkeep 为 per-DW；axis tkeep 为 per-byte，tb 内做转换）。
-
-编译/运行时务必让 `+define+DATA_WIDTH` 与 `+DATA_WIDTH` plusarg 一致（见 §6）。
+每通道是**一条共享 `axis_if` 总线**：同一 vif 同时注册到 RC 与 EP 两侧的 `<ch>_agent`，一端 MASTER 一端 SLAVE。
 
 ---
 
-## 4. 8 通道接线与角色
+## 2. 接入用法
 
-PCIe 有 RC、EP 两侧，各 4 条 AXI-Stream 通道（RQ/RC/CQ/CC），共 **8 个 `axis_agent`**。每通道按 PG213 真实 TUSER 宽度独立参数化。
+### 2.1 test：工厂覆盖 + env_config
 
-### 各通道 axis 角色（`xilinx_pcie_env_config::create_axis_config` 设定）
-
-| 通道 | RC 侧角色 | EP 侧角色 | 含义 |
-|------|----------|----------|------|
-| RQ | SLAVE | **MASTER** | 请求发出 |
-| RC | **MASTER** | SLAVE | Completion 返回 |
-| CQ | **MASTER** | SLAVE | 请求到达 |
-| CC | SLAVE | **MASTER** | Completion 返回 |
-
-（MASTER 驱动 tvalid/tdata，SLAVE 驱动 tready。tb_top 的 `assign` 桥接与此一致。）
-
-### tb_top 接线要点（回环仿真）
-
-- 时钟：250 MHz（`always #2ns clk = ~clk`，4ns 周期）。
-- 复位：`rst_n` 低有效，拉低 10+1 周期后释放。所有 `axis_if(.aresetn(rst_n))` 与 `xilinx_pcie_if(.rst_n(rst_n))` 共用。
-- `axis_if` 实例参数：`#(DATA_WIDTH, 4, 4, <通道>_TUSER_WIDTH, 0, 1, 1)`（TID=TDEST=4，HAS_TSTRB=0，HAS_TKEEP=1，HAS_TLAST=1）。
-- tkeep 转换：axis per-byte ⇄ pcie per-DW（`byte_keep_to_dw_keep` / `dw_keep_to_byte_keep`）。
-
-### config_db 注册路径（vif 下发）
+在 test 的 `build_phase` 顶部把上游基类 adapter 覆盖为 Xilinx 子类，并把 env 设为 SV 接口模式（关掉 TLM loopback）：
 
 ```systemverilog
-// RC 侧四通道（EP 侧同理，路径前缀 ep_agent）
-uvm_config_db#(vif_rq_t)::set(null,"uvm_test_top.env.rc_agent.rq_agent*","vif",rc_rq_if);
-uvm_config_db#(vif_rc_t)::set(null,"uvm_test_top.env.rc_agent.rc_agent*","vif",rc_rc_if);
-uvm_config_db#(vif_cq_t)::set(null,"uvm_test_top.env.rc_agent.cq_agent*","vif",rc_cq_if);
-uvm_config_db#(vif_cc_t)::set(null,"uvm_test_top.env.rc_agent.cc_agent*","vif",rc_cc_if);
-// cfg / interrupt agent
-uvm_config_db#(virtual xilinx_pcie_cfg_if)::set(null,"uvm_test_top.env.rc_cfg_agent*","cfg_vif",rc_cfg_if);
-uvm_config_db#(virtual xilinx_pcie_cfg_if)::set(null,"uvm_test_top.env.rc_int_agent*","cfg_vif",rc_cfg_if);
-// 统一内存句柄（默认 use_unified_mem=0 时不被使用）
-uvm_config_db#(host_mem_api)::set(null,"uvm_test_top.env","host_mem",host_mem_inst);
-uvm_config_db#(host_mem_api)::set(null,"uvm_test_top.env","dev_mem", dev_mem_inst);
+class xilinx_pcie_adapter_base_test extends uvm_test;
+  pcie_tl_env        env;
+  pcie_tl_env_config cfg;
+
+  function void build_phase(uvm_phase phase);
+    super.build_phase(phase);
+
+    // 关键：把 pcie_tl_if_adapter 工厂覆盖为 Xilinx 子类
+    pcie_tl_if_adapter::type_id::set_type_override(
+        xilinx_pcie_if_adapter::get_type());
+
+    cfg = pcie_tl_env_config::type_id::create("cfg");
+    cfg.if_mode          = SV_IF_MODE;   // 关 env TLM loopback，走 SV 接口
+    cfg.rc_agent_enable  = 1;
+    cfg.ep_agent_enable  = 1;
+    cfg.switch_enable    = 0;
+    cfg.ep_auto_response = 1;            // EP 自动回 CplD
+    cfg.infinite_credit  = 1;            // SV_IF 模式无 FC 补充路径
+    cfg.scb_enable       = 0;            // 上游 scoreboard 依赖 TLM loopback，SV_IF 下不可用
+    uvm_config_db#(pcie_tl_env_config)::set(this, "env", "cfg", cfg);
+
+    env = pcie_tl_env::type_id::create("env", this);
+  endfunction
+endclass
 ```
 
-env 组件实例名：`rc_agent` / `ep_agent`（各含 `rq_agent`/`rc_agent`/`cq_agent`/`cc_agent`）、`rc_cfg_agent` / `ep_cfg_agent` / `rc_int_agent` / `ep_int_agent`、`v_sqr`（virtual sequencer）、`scb`（scoreboard）、`cov`（coverage）。
+> env 用上游 `pcie_tl_env`（**不是** xilinx env）。adapter 实例名由上游固定为 `rc_adapter` / `ep_adapter`，role 据此判定，无需额外配置。
 
-> vif typedef 的 7 个参数必须与 `xilinx_pcie_pkg` 内 `axis_agent_xx_t` 的内部 `vif_t` **完全一致**（DATA_WIDTH、各通道 TUSER 宽度），否则 config_db 类型不匹配、取不到 vif。
+### 2.2 tb：用 `XILINX_ADAPTER_WIRE` 宏注册 4 通道 vif
 
----
-
-## 5. env_config 配置参考
-
-`xilinx_pcie_env_config` 单对象集中配置，test 里 create 后下发到 env。常用字段（默认值）：
-
-### 链路 / 能力
-
-| 字段 | 默认 | 说明 |
-|------|------|------|
-| `DATA_WIDTH` | `XILINX_DATA_W` | 须与编译期 `+define+DATA_WIDTH` 一致 |
-| `straddle_enable` | 0 | straddle 使能（DW≥256） |
-| `max_payload_size` (MPS) | 256 | 字节，128/256/512/1024/2048/4096 |
-| `max_read_request_size` (MRRS) | 512 | 字节 |
-| `read_completion_boundary` (RCB) | 64 | 字节 |
-| `link_width` | 8 | x1/x2/x4/x8/x16 |
-| `extended_tag_enable` | 1 | 10-bit Tag |
-| `max_outstanding` | 256 | 最大未完成请求 |
-
-### 流控 / 排序
-
-| 字段 | 默认 | 说明 |
-|------|------|------|
-| `fc_enable` / `infinite_credit` | 1 / 1 | 流控、无限信用 |
-| `init_ph/pd/nph/npd/cplh/cpld_credit` | 32/256/32/256/32/256 | 初始信用 |
-| `relaxed_ordering_enable` / `id_based_ordering_enable` | 1 / 1 | 排序属性 |
-
-### Config / 中断
-
-| 字段 | 默认 | 说明 |
-|------|------|------|
-| `cfg_enable` | 1 | config 空间使能 |
-| `vendor_id` / `device_id` | 10EE / 9038 | Xilinx 默认 |
-| `class_code` | 02_00_00 | |
-| `interrupt_enable` / `msi_vector_count` | 1 / 1 | MSI |
-| `msix_table_size` / `msix_table_bar` / `msix_table_offset` | 0 / 0 / 0 | MSI-X |
-
-### 带宽（valid/ready 节奏，透传给 axis_config）
-
-| 字段 | 默认 | 说明 |
-|------|------|------|
-| `tx_valid_mode` | `VALID_ZERO_IDLE` | 发送节奏（**零延时满吞吐**） |
-| `tx_idle_cycles` / `tx_valid_weight` | 0 / 100 | |
-| `rx_ready_mode` / `rx_ready_weight` | — / 100 | 接收背压 |
-| `per_channel_bw_config` | 0 | 1 时逐通道独立配 `channel_bw_cfg[]` |
-
-### EP 自动响应 / 内存 / 超时
-
-| 字段 | 默认 | 说明 |
-|------|------|------|
-| `ep_auto_response` | 1 | EP 自动回 Completion |
-| `response_delay_min/max` | 0 / 10 | 响应延迟（周期） |
-| `use_unified_mem` | 0 | 1 时启用统一内存（需 §4 句柄） |
-| `mem_size` | 4 GB | 内存模型大小 |
-| `cpl_timeout_ns` | 50000 | Completion 超时 |
-
-### 检查 / 覆盖率
-
-| 字段 | 默认 | 说明 |
-|------|------|------|
-| `scb_enable` / `scb_completion_check` / `scb_data_integrity` / `scb_ordering_check` / `scb_descriptor_check` | 全 1 | scoreboard 各检查项 |
-| `rq/rc/cq/cc_protocol_check_enable` | 全 1 | 各通道协议检查 |
-| `desc_format_check_enable` / `tuser_consistency_check` / `payload_alignment_check` | 全 1 | monitor 解码路径协议检查，TYPE/语义见 §11.3 |
-| `cov_enable` 及 `cov_*` | **全 0** | 覆盖率默认关，按需开 |
-
----
-
-## 6. 运行测试
-
-```bash
-cd xilinx_pcie/sim
-
-make compile                              # 仅编译（默认 DATA_WIDTH=256, STRADDLE_EN=0）
-make sim TEST=xilinx_pcie_sanity_test     # 跑指定 test（需先 compile）
-make sanity                               # 编译+跑 sanity
-make straddle                             # 编译+跑 straddle（STRADDLE_EN=1）
-make loopback                             # 编译+跑 loopback
-make clean
-
-# 改位宽 / straddle / 种子
-make sanity DATA_WIDTH=512
-make straddle DATA_WIDTH=256 STRADDLE_EN=1
-make sim TEST=xilinx_pcie_stress_test SEED=random
-```
-
-直接 VCS 命令（离线/自定义构建）：
-
-```bash
-vcs -sverilog -ntb_opts uvm-1.2 -timescale=1ns/1ps -full64 \
-    -f filelist.f +define+DATA_WIDTH=256 +define+STRADDLE_EN=0 -o work/simv
-./work/simv +UVM_TESTNAME=xilinx_pcie_sanity_test +DATA_WIDTH=256 +STRADDLE_EN=0 +ntb_random_seed=1
-```
-
-> **plusarg 与 define 必须一致**：`+define+DATA_WIDTH=N`（编译期，定宽度）与 `+DATA_WIDTH=N`（运行期，传给 env_config）须相同。STRADDLE 同理。
-
-可用 test：`xilinx_pcie_sanity_test` / `loopback_test` / `straddle_test` / `stress_test` / `mega_stress_test` / `unified_mem_test`（均继承 `xilinx_pcie_base_test`）。
-
-### 判定 PASS
-
-`UVM_ERROR = 0` 且 `UVM_FATAL = 0`；scoreboard 无 mismatch。
-
----
-
-## 7. 测试 / vseq / seq 库与自写 test
-
-### test → vseq 映射
-
-| test | 启动的 vseq |
-|------|-------------|
-| sanity / loopback / straddle / stress | `xilinx_pcie_loopback_vseq` |
-| mega_stress | `xilinx_pcie_mega_stress_vseq` |
-| unified_mem | `xilinx_pcie_unified_mem_vseq` |
-
-`xilinx_pcie_loopback_vseq` 覆盖：Config 枚举（CfgRd0）→ Memory Write/Read（MWr/MRd + CplD）→ DMA Write/Read → MSI 中断。旋钮：`num_transactions`、`max_payload_bytes`。
-
-### seq 库（`src/seq/`）
-
-`base` / `cfg`（配置读写）/ `mem`（MWr/MRd）/ `dma`（EP DMA）/ `msi`（中断）/ `atomic`（原子操作）。vseq：`loopback` / `mega_stress` / `unified_mem`。
-
-### 自写 test 模板
+tb（`tb/tb_adapter_top.sv`）声明 4 条共享总线，再用宏把每条 vif 注册到两侧 adapter 内的 `<ch>_agent`。时钟 250 MHz、低有效复位；时钟门控在 `g_xilinx_adapter_quiesce`（`extract_phase` 置位）上，UVM run_phase 一结束即停钟，避免判决后 axis 线程刷屏。
 
 ```systemverilog
-class my_pcie_test extends xilinx_pcie_base_test;
-  `uvm_component_utils(my_pcie_test)
-  function new(string n, uvm_component p); super.new(n,p); endfunction
+// 4 条共享通道总线（TUSER 宽度按 PG213 通道）
+axis_if #(`XILINX_DATA_W,4,4,`XILINX_RQ_TUSER_W,0,1,1) rq_bus(.aclk(clk),.aresetn(rst_n));
+axis_if #(`XILINX_DATA_W,4,4,`XILINX_RC_TUSER_W,0,1,1) rc_bus(.aclk(clk),.aresetn(rst_n));
+axis_if #(`XILINX_DATA_W,4,4,`XILINX_CQ_TUSER_W,0,1,1) cq_bus(.aclk(clk),.aresetn(rst_n));
+axis_if #(`XILINX_DATA_W,4,4,`XILINX_CC_TUSER_W,0,1,1) cc_bus(.aclk(clk),.aresetn(rst_n));
 
+initial begin
+  `XILINX_ADAPTER_WIRE(rq, RQ, rq_bus)
+  `XILINX_ADAPTER_WIRE(rc, RC, rc_bus)
+  `XILINX_ADAPTER_WIRE(cq, CQ, cq_bus)
+  `XILINX_ADAPTER_WIRE(cc, CC, cc_bus)
+  run_test();
+end
+```
+
+宏（`tb/xilinx_adapter_connect.svh`）把同一 vif `set` 到 `uvm_test_top.env.rc_adapter*.<ch>_agent*` 与 `ep_adapter*.<ch>_agent*` 两处。master/slave 区分由 adapter 的 `make_axis_config` 按 role+channel 决定，tb 不必区分方向。
+
+---
+
+## 3. 激励与端到端校验
+
+### 3.1 用 pcie_tl_vip 的 seq 库
+
+激励不再用 xilinx 自己的 seq——直接复用上游 `pcie_tl_vip` 的 seq / vseq 库，在 `env.v_seqr`（virtual sequencer）或 `env.rc_agent.sequencer` 上 start。常用：
+
+| vseq / seq | 场景 |
+|---|---|
+| `pcie_tl_rc_ep_rdwr_vseq` | posted MemWr + 非 posted MemRd（→CplD） |
+| `pcie_tl_enum_then_dma_vseq` | Config 枚举（CfgWr/CfgRd）+ DMA Mem burst |
+| `pcie_tl_backpressure_vseq` | 背靠背 posted MemWr 串流压测 |
+| `pcie_tl_mem_wr_seq` / `pcie_tl_mem_rd_seq` | 单笔 MWr / MRd（base_test PoC 用） |
+| `pcie_tl_err_poisoned_seq` | 注入 poisoned（EP=1）MemWr（诊断用） |
+
+示例（薄 wrapper test）：
+
+```systemverilog
+class xilinx_pcie_adapter_rdwr_test extends xilinx_pcie_adapter_base_test;
   task run_phase(uvm_phase phase);
-    xilinx_pcie_loopback_vseq vseq;
+    pcie_tl_rc_ep_rdwr_vseq rd;
     phase.raise_objection(this);
-    vseq = xilinx_pcie_loopback_vseq::type_id::create("vseq");
-    vseq.num_transactions  = 50;
-    vseq.max_payload_bytes = 256;
-    vseq.start(env.v_sqr);            // 在 virtual sequencer 上启动
-    #50us;                            // drain：等 EP CplD 全部回完
+    rd = pcie_tl_rc_ep_rdwr_vseq::type_id::create("rd");
+    rd.addr = 64'h1_0000_0000; rd.length = 8; rd.is_read = 1;
+    rd.start(env.v_seqr);
+    #5000ns;                      // drain：等 EP CplD 回完
     phase.drop_objection(this);
   endtask
 endclass
 ```
 
-> drain 时间要足够长（sanity 用 `#50us`）——MWr+MRd 对需等 EP 的 CplD 全部传回，过短会漏判。
+### 3.2 薄 `xilinx_pcie_e2e_checker` 做 req↔cpl 匹配
+
+上游 scoreboard 的 completion 匹配靠 `register_pending()`，**仅在 env 的 TLM loopback 路径运行**（SV_IF 模式关），故本 repo 提供薄 checker（`src/check/xilinx_pcie_e2e_checker.sv`）做端到端校验：
+
+- tap 点（在 test 的 `connect_phase` 接）：
+  - `req_imp ← env.ep_agent.monitor.tlp_ap`（completer 侧收到的请求）
+  - `cpl_imp ← env.rc_agent.monitor.tlp_ap`（requester 侧返回的完成）
+- 按 **tag** 把非 posted 请求与其返回的 completion 配对，校验 completion 的 `byte_count` 回显请求长度。
+- 判据计数：`n_matched / outstanding / n_unmatched / n_mismatch`（如 `1/0/0/0`）。posted 写无完成，故 `n_req=0`。
+- **范围仅 TLP 级**，不做 PG213 协议判定。
+
+base_test 已建好 `e2e_chk` 并接好 tap；自写 test 继承即可。EP 自动响应在 SV_IF 模式下由 base_test 的 `xilinx_adapter_poc_responder`（订阅 `ep_agent.monitor.tlp_ap` → `ep_driver.handle_request`）再接出来，因为 TLM loopback 关闭后上游不会自动驱动 EP 响应。
 
 ---
 
-## 8. 连接真实 Xilinx PCIe IP
+## 4. 构建与运行
 
-回环仿真用 `tb/tb_top.sv` + `tb/xilinx_pcie_loopback_dut.sv`。接真实 Xilinx PCIe IP 时改用 `tb/tb_with_dut.sv`（模板，默认不参与编译）。
+### filelist 与编译参数
 
-PG213 AXI-Stream 端口对应（EP 侧）：
+仿真用 `sim/filelist_adapter.f`，顺序：axis_vip（lib filelist）→ host_mem → pcie_tl_vip（`pcie_tl_if.sv` + `pcie_tl_pkg.sv`）→ 本 repo `xilinx_pcie_params.svh` + `xilinx_pcie_adapter_pkg.sv` + 接口 → 新 tb/tests。
 
-| Xilinx IP 端口 | 方向 | 对应 `ep_if` 通道 |
-|----------------|------|-------------------|
-| `m_axis_rq_*` | EP → IP 请求 | `ep_if.rq_*` |
-| `s_axis_rc_*` | IP → EP 完成 | `ep_if.rc_*` |
-| `s_axis_cq_*` | IP → EP 请求 | `ep_if.cq_*` |
-| `m_axis_cc_*` | EP → IP 完成 | `ep_if.cc_*` |
+编译期 `+define+` 参数（`src/xilinx_pcie_params.svh`）：
 
-步骤（见 `tb_with_dut.sv` 头注释）：
+| 宏 | 默认 | 说明 |
+|----|------|------|
+| `DATA_WIDTH` | 256 | AXI-Stream 数据位宽，合法 **64/128/256/512**，须与真实 PCIe IP 一致 |
+| `STRADDLE_EN` | 0 | straddle 使能，仅 `DATA_WIDTH ≥ 256` 有效；adapter 由 `+STRADDLE_EN` 运行期 plusarg 采样接入 straddle 引擎 |
 
-1. 取消注释真实 DUT 实例化段落；
-2. 把 `xdma_0` 换成实际 PCIe IP wrapper 模块名；
-3. 按实际 IP 端口列表增删端口映射；
-4. `filelist.f` 里把 `tb_top.sv` 换成 `tb_with_dut.sv` 作仿真顶层；
-5. `+define+DATA_WIDTH=N` 须与真实 IP 配置一致。
+### 远程 VCS 构建（`10.11.10.61:/tmp/xbuild`）
 
----
-
-## 9. 复位接线注意点
-
-- **xilinx_pcie 不实例化 `axis_env`，也不接 `axis_reset_handler`。** 各 `axis_agent` 的 `rst_listener` 在 `connect_phase` 被连到 **dummy 事件**（防 null 访问），这些事件**永不触发**。
-- 因此 axis VIP 的"env 级复位编排"在本项目里**被绕过**——复位完全由共享的 `rst_n`（低有效）经各 `axis_if.aresetn` 驱动。
-- axis driver/monitor **直接采样 `aresetn`** 门控复位（按 `axis_config.reset_polarity`，默认 `AXIS_RESET_ACTIVE_LOW`，与 `rst_n` 极性匹配）：`rst_n=0` 期间 master 压低 tvalid、slave 压低 tready、monitor 不采样；释放后 master 首拍对齐时钟沿再驱动。**无需额外接线**，但需知道复位语义来自 `rst_n` 而非 axis 的 reset_handler。
-- 接真实 DUT 时，确保 PCIe IP 的 user reset 与各 `axis_if.aresetn` 一致（低有效）。若 DUT 复位为高有效，需把对应 `axis_config.reset_polarity` 改为 `AXIS_RESET_ACTIVE_HIGH`。
-
----
-
-## 10. 已知陷阱
-
-- **路径硬编码 + 版本错位**（§2）：filelist 绝对路径需逐机 sed；务必确认 axis 副本是最新版，否则修复静默丢失。**集成/回归前先核对。**
-- **straddle 仅 DATA_WIDTH ≥ 256**：低于此宽度开 `STRADDLE_EN=1` 无效/可能 FATAL。
-- **define 与 plusarg 必须一致**：`+define+DATA_WIDTH` 与 `+DATA_WIDTH` 不一致会导致 env_config 与硬件宽度错配。
-- **drain 时间**：vseq 跑完后需留足 drain（如 `#50us`）等 EP CplD 回完，否则漏判。
-- **覆盖率默认关**：`cov_enable=0`，要测覆盖率须显式打开 `cov_*`。
-- **统一内存默认关**：`use_unified_mem=0`；开启需注入 `host_mem`/`dev_mem` 句柄（tb_top 已注册，见 §4）。
-- **回归基线**：在更新版 axis 上，`sanity/loopback/stress/unified_mem/straddle`@DW=256 与 `sanity`@DW=512 全部 `UVM_ERROR=0`（已实测）。
-
----
-
-## 11. 多 agent 配置（可配 N RC + M EP）
-
-默认 env 为 1 RC + 1 EP。本特性允许在一个 env 内例化 **N 个 RC + M 个 EP** agent（如多 RC 拓扑、多 EP fan-out），数量由 `env_config.num_rc` / `num_ep` 驱动，tb 用连线宏逐 agent 接入。**向后兼容**：两者默认均为 1，现有 `tb_top` 与全部 7 个 test 行为不变。
-
-### 11.1 数量配置（`num_rc` / `num_ep`）
-
-| 字段 | 默认 | 说明 |
-|------|------|------|
-| `num_rc` | 1 | RC agent 数量（实例名 `rc_agent_0..num_rc-1`） |
-| `num_ep` | 1 | EP agent 数量（实例名 `ep_agent_0..num_ep-1`） |
-
-约束（`xilinx_pcie_env_config::validate`）：`num_rc≥0`、`num_ep≥0` 且 `num_rc+num_ep≥1`，否则 `uvm_fatal`。
-
-**在 test 里设**：`base_test.build_phase` 按
-`create(cfg) → _parse_plusargs() → validate() → create(env)` 顺序执行，故须在 **`_parse_plusargs()` 钩子**里写 `cfg.num_rc/num_ep`（在 validate 与 env build 之前生效）。覆盖该 protected 虚函数即可（见 `tests/xilinx_pcie_multi_agent_test.sv`）：
-
-```systemverilog
-protected virtual function void _parse_plusargs();
-    super._parse_plusargs();
-    cfg.num_rc = 1;
-    cfg.num_ep = 3;
-endfunction
-```
-
-> 不要在 `run_phase` 或自定义 build 后段改 `num_*` —— env 已按旧值建好 agent 数组，改了不生效。
-
-### 11.2 连线宏（`XILINX_PCIE_WIRE_RC` / `WIRE_EP`）
-
-宏定义在 `tb/xilinx_pcie_connect.svh`，签名：
-
-```
-`XILINX_PCIE_WIRE_RC(IDX, PCIE_IF, CFG_IF, CLK, RSTN)
-`XILINX_PCIE_WIRE_EP(IDX, PCIE_IF, CFG_IF, CLK, RSTN)
-```
-
-每个宏对 **一个** agent 做三件事：
-
-1. **声明该 agent 的 4 条 `axis_if`**（`<role>_agent_<IDX>_{rq,rc,cq,cc}_if`），按 PG213 各通道 TUSER 宽度参数化（`#(XILINX_DATA_W,4,4,<ch>_TUSER_W,0,1,1)`）；
-2. **按角色方向桥接** `axis_if` ⇄ `PCIE_IF`（含 tkeep per-byte ⇄ per-DW 转换 `xilinx_byte_keep_to_dw`/`xilinx_dw_keep_to_byte`）；
-3. **按索引路径 `config_db` 注册** 4 条 axis vif（路径 `uvm_test_top.env.<role>_agent_<IDX>.<ch>_agent*`）+ cfg/int vif（`<role>_cfg_agent_<IDX>*` / `<role>_int_agent_<IDX>*`）。
-
-RC vs EP 各通道 axis master/slave 方向相反（与 §4 角色表一致）：
-
-| 通道 | RC 侧 | EP 侧 | 桥接方向 |
-|------|-------|-------|----------|
-| RQ | SLAVE | **MASTER** | RC: pcie→axis；EP: axis→pcie |
-| RC | **MASTER** | SLAVE | RC: axis→pcie；EP: pcie→axis |
-| CQ | **MASTER** | SLAVE | RC: axis→pcie；EP: pcie→axis |
-| CC | SLAVE | **MASTER** | RC: pcie→axis；EP: axis→pcie |
-
-**契约（务必遵守）**：tb 里 `WIRE_<role>` 宏的调用次数必须 **≥ `cfg.num_<role>`**。env 的每个 agent 在 build 时按索引路径取 vif，缺失则 `uvm_fatal`（agent 取不到 vif）。
-
-**无 DUT 时**：宏只**读取**（消费）master 通道的 `PCIE_IF.<ch>_tready`、不驱动它，故须把 master 通道 DUT 侧的 tready 手动拉高，否则发包被反压。按角色：RC 的 master 通道是 `rc`/`cq`，EP 的是 `rq`/`cc`。demo `tb/tb_multi_agent.sv` 即对 RC 拉高 `rc_tready`/`cq_tready`、对各 EP 拉高 `rq_tready`/`cc_tready`。slave 通道的 `*_tready` 由宏（agent 侧）驱动，**切勿**在 tb 里重复驱动，否则多驱动错误。
-
-### 11.3 检查模型
-
-多 agent 下，原 scoreboard（`src/env/xilinx_pcie_scoreboard.sv`）退化为**中心收集器**：经各 agent 的 collector tap 调用 `record(agent_id, role, tlp)`，**按 agent 分协议类型做直方图**。`report_phase` 打印：
-
-```
-[XILINX_PCIE_<ROLE>_<i>] <TLP_TYPE> = N      // 如 [XILINX_PCIE_EP_0] TLP_MEM_WR = 4
-```
-
-key 为 `<role.name()>_<agent_id>`（`role.name()` 即 `XILINX_PCIE_RC`/`XILINX_PCIE_EP`）；`<TLP_TYPE>` 为 `tlp.kind` 枚举名。错误侧：对带 **poisoned（EP 位）** 的 TLP 聚合计数，外加下表的各项协议检查，`report_phase` 末尾以 `uvm_error("PROTO_ERR", ...)` 按 `[agent_key] <TYPE> xN` 报出。
-
-> **收集器不做数据/内存配对**（多 agent 拓扑下源宿对应关系由用户自行约定，须自查数据正确性）。**协议违规仍由各 agent 本地检查即时 `uvm_error`**（与单 agent 行为一致）；收集器只负责跨 agent 的类型直方图 + poisoned/协议错误聚合，作为"各 agent 均被驱动"的客观证据。
-
-#### 已实现的协议检查（monitor 解码路径，逐项由 env_config 开关门控）
-
-各检查在 `src/agent/xilinx_pcie_monitor.sv` 的 `run_protocol_checks()` 中实现，于每个通道解码出 `pcie_tl_tlp` 后运行；违规时本地 `uvm_error` + `publish_error("<TYPE>")`，经 `err_ap → xilinx_pcie_error_tap → scoreboard.record_error()` 进入中央 `err_count`，最终以 `PROTO_ERR` 报出。所有检查仅使用解码路径实际可得字段，且对合法流量恒不触发（见各项不变式）。
-
-| env_config 开关 | TYPE | 检查定义（PG213 语义） |
-|---|---|---|
-| `rq_protocol_check_enable` | `RQ_PROTO` | RQ（请求）通道到达的 TLP 不得为完成类（`get_category()!=COMPLETION`）。 |
-| `rc_protocol_check_enable` | `RC_PROTO` | RC（完成）通道到达的 TLP 必须为完成类。 |
-| `cq_protocol_check_enable` | `CQ_PROTO` | CQ（请求）通道到达的 TLP 不得为完成类。 |
-| `cc_protocol_check_enable` | `CC_PROTO` | CC（完成）通道到达的 TLP 必须为完成类。 |
-| `desc_format_check_enable` | `DESC_FORMAT` | 描述符 `tag` 必须落在配置 tag 空间内：`tag < min(max_outstanding, extended_tag?1024:256)`。 |
-| `tuser_consistency_check` | `TUSER` | RQ/CQ 携带数据的写请求，其 tuser `first_be` 不应全零（数据传输首 DW 字节使能非零）。 |
-| `payload_alignment_check` | `PAYLOAD_ALIGN` | payload 字节数与 `length` 字段一致：WITH_DATA 时 `payload.size()==length*4`（`length==0` 视作 1024 DW=4096 B）；NO_DATA 时 `payload.size()==0`。 |
-
-另有 `MALFORMED`（空 axis_packet，解码路径既有检查）与 poisoned 聚合，与上表并存。
-
-> **注**：`straddle_boundary_check` 开关保留但当前未实现独立检查（straddle 拆包正确性由 straddle 引擎自身保证 + clean 回归覆盖）。方向类 `*_PROTO` 在标准 `write_*` 解码路径中因 decode 按通道强制 TLP 类别而不会被合法流量触发；其触发与全部 TYPE 的路由验证见 `tests/xilinx_pcie_err_inject_test.sv`（经 `monitor.inject_check_tlp()` 定向注入，逐条触发并断言 `PROTO_ERR [agent] <TYPE> x1`，且仅命中被注入 agent）。
-
-### 11.4 demo
-
-最小可跑示例：`tb/tb_multi_agent.sv`（**1 RC + 3 EP，宏连线，无 DUT**，演示 posted MWr）。
-
-- tb 实例化 1 套 RC + 3 套 EP 的 `xilinx_pcie_if`/`xilinx_pcie_cfg_if`，对各 master 通道 DUT 侧 tready 拉高，再调用宏：
-
-  ```systemverilog
-  `XILINX_PCIE_WIRE_RC(0, rc_if,  rc_cfg_if,  clk, rst_n)
-  `XILINX_PCIE_WIRE_EP(0, ep0_if, ep0_cfg_if, clk, rst_n)
-  `XILINX_PCIE_WIRE_EP(1, ep1_if, ep1_cfg_if, clk, rst_n)
-  `XILINX_PCIE_WIRE_EP(2, ep2_if, ep2_cfg_if, clk, rst_n)
-  ```
-
-- test `tests/xilinx_pcie_multi_agent_test.sv`：在 `_parse_plusargs()` 里设 `num_rc=1 num_ep=3`，`run_phase` 给每个 `env.v_sqr.ep_sqr_arr[i]` 各发 4 笔 **posted MWr**（`is_write=1`，无 MRd，避免无应答对端的 completion 超时）。收集器据此打印 `[XILINX_PCIE_EP_0/1/2] TLP_MEM_WR = 4`，证明 3 个 EP 均被驱动。
-- filelist `sim/filelist_multi.f`：在 `filelist.f` 基础上把仿真顶层换为 `tb_multi_agent.sv`、**去掉 `loopback_dut`**（无 DUT，否则其接口端口悬空报错）、并加入 `xilinx_pcie_multi_agent_test.sv`。
-
-跑法：
+VCS 只在远程 `ryan@10.11.10.61:2222`（构建根 `/tmp/xbuild`，`filelist_adapter.f` 路径硬编码到此根）。改文件后先 rsync 到 `/tmp/xbuild` 对应路径再编译：
 
 ```bash
-cd xilinx_pcie/sim
-vcs -sverilog -ntb_opts uvm-1.2 -timescale=1ns/1ps -full64 \
-    -f filelist_multi.f +define+DATA_WIDTH=256 +define+STRADDLE_EN=0 -o work/simv_multi
-./work/simv_multi +UVM_TESTNAME=xilinx_pcie_multi_agent_test +DATA_WIDTH=256 +STRADDLE_EN=0 +ntb_random_seed=1
+ssh -p 2222 ryan@10.11.10.61 'source ~/set-env.sh >/dev/null 2>&1
+  export TMPDIR=/tmp/xbuild/xilinx_pcie/sim/tmp
+  cd /tmp/xbuild/xilinx_pcie/sim && mkdir -p work logs tmp
+  vcs -sverilog -ntb_opts uvm-1.2 -timescale=1ns/1ps -full64 -Mdir=csrc_ad \
+    -l logs/compile_ad.log -o work/simv_ad -f filelist_adapter.f \
+    +define+DATA_WIDTH=256 +define+STRADDLE_EN=0
+  ./work/simv_ad +UVM_TESTNAME=xilinx_pcie_adapter_rdwr_test \
+    +DATA_WIDTH=256 +STRADDLE_EN=0 +ntb_random_seed=1'
 ```
 
-### 11.5 回归基线
+> **plusarg 与 define 必须一致**：`+define+DATA_WIDTH=N`（编译期）与 `+DATA_WIDTH=N`（运行期）须相同；STRADDLE 同理（`+STRADDLE_EN` 运行期 plusarg 接入 straddle 引擎）。
 
-下表为 DATA_WIDTH ∈ {256, 512} 全矩阵实测（host 61，`+STRADDLE_EN=0`，`ntb_random_seed=1`；base 用 `filelist.f`/`tb_top`，multi_agent 用 `filelist_multi.f`/`tb_multi_agent`）。全部 `UVM_ERROR : 0 / UVM_FATAL : 0`：
+可用 test：`xilinx_pcie_adapter_base_test`（mem PoC 基类）/ `_smoke_test` / `_rdwr_test` / `_backpressure_test` / `_enum_dma_test` / `_cfg_test` / `_err_poisoned_test`。
 
-| test | DW=256 | DW=512 |
-|------|:------:|:------:|
-| `sanity` | PASS | PASS |
-| `loopback` | PASS | PASS |
-| `stress` | PASS | PASS |
-| `straddle` | PASS | PASS |
-| `unified_mem` | PASS | PASS |
-| `mega_stress` | PASS | PASS |
-| `multi_agent`（1 RC + 3 EP） | PASS | PASS |
+### 判定 PASS
+
+功能场景 `UVM_ERROR = 0` 且 `UVM_FATAL = 0`，且 e2e checker 计数符合预期（如 `1 matched / 0 outstanding / 0 unmatched / 0 mismatch`）。错误注入 / 诊断场景按其自身判据。
+
+---
+
+## 5. 依赖
+
+| 依赖 | 提供 | 备注 |
+|---|---|---|
+| `pcie_work/pcie_tl_vip` | 协议层全部（agent/driver/monitor/env/seq/scoreboard/base adapter） | 外部引用，本 repo 不拷贝 |
+| `axis_work/axis_vip` | AXI-Stream VIP（`axis_if`/`axis_agent`/driver/monitor/`axis_config`） | adapter 内 4 个 axis_agent 的物理层 |
+| `shm_work/host_mem` | 统一内存模型 | filelist 编入 |
+
+**pcie_tl_vip 需两处补丁**（已提交 `pcie_work`，commit `d7f1f3c`，只动 hook/bug、不改协议逻辑）：
+
+1. `pcie_tl_if_adapter::send()` / `receive()` 加 `virtual` —— 否则工厂 override 不分派。
+2. `pcie_tl_enum_then_dma_vseq` 的 `max_payload=0` → `chunk=0` 死循环，修为 `max_payload=256`。
+
+> 上游 pcie_tl_vip 活跃开发（multi-root/pf-vf/link-delay），集成/回归前锁定一个已知能编译的 commit。
+
+---
+
+## 6. 已知限制（诚实记录）
+
+- **Config-TLP 描述符字段布局为 BFM 内部自洽**：codec 的 CfgRd/CfgWr 描述符编解码做到了两端同 codec 的 round-trip（`encode_rq@RC → AXIS → decode_cq@EP` 字段保真，`cfg_test` 已验 `reg_num` / `completer_id` 等回环），但**未对照真实 PG213 config 描述符的线格式**。若对接真实 Xilinx IP 的 config 通道，需按 PG213 校准描述符位域。
+- **cfg-read completion 的 `byte_count` 在上游被留 0**：PCIe 把 config-read 的 Byte Count 固定为 4，而上游 ep_driver 把 `cpl.byte_count` 留 0，故 e2e checker 对 `TLP_CFG_RD0/RD1` 完成**豁免** byte_count 校验（仍校验 tag 匹配 + 返回数据，证明送达）。
+- **adapter 不做协议判定**：注入的 poisoned / malformed 错误由上游 `pcie_tl_base_monitor` 在 EP 侧 `receive()` 路径处理；adapter 只做忠实编解码。`err_poisoned_test` 是**诊断性**的，不断言 pass，只观察上游 EP monitor 的反应。
+- **scoreboard 关闭**：SV_IF 模式下上游 scoreboard（`register_pending` 依赖 TLM loopback）不可用，端到端校验改由薄 `xilinx_pcie_e2e_checker` 承担。
+
+---
+
+## 7. 回归矩阵
+
+DATA_WIDTH ∈ {256, 512}，`+ntb_random_seed=1`，远程 VCS。所有功能场景 `UVM_ERROR=0 / UVM_FATAL=0`：
+
+| 场景 | DW256 | DW512 | checker |
+|---|---|---|---|
+| adapter mem PoC（`base_test` / `smoke`） | UVM_FATAL=0 | UVM_FATAL=0 | 1 matched |
+| rdwr（straddle 0/1） | ✅ | ✅ | 1/0/0/0 |
+| backpressure | ✅ | ✅ | 0 req（posted） |
+| enum_then_dma | ✅ | ✅ | 1/0/0/0 |
+| cfg round-trip | ✅ | ✅ | reg_num round-trips |
+| err_poisoned | 上游 EP monitor warning（adapter 不判协议） | 同 | — |
+
+> checker 列为 `xilinx_pcie_e2e_checker` 计数 `matched/outstanding/unmatched/mismatch`；backpressure 全 posted 写，无非 posted 请求被追踪（`n_req=0`）。
