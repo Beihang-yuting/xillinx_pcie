@@ -16,4 +16,7 @@
 /tmp/xbuild/xilinx_pcie/tests/xilinx_pcie_adapter_smoke_test.sv
 /tmp/xbuild/xilinx_pcie/tests/xilinx_pcie_adapter_cfg_test.sv
 /tmp/xbuild/xilinx_pcie/tests/xilinx_pcie_adapter_enum_dma_test.sv
+/tmp/xbuild/xilinx_pcie/tests/xilinx_pcie_adapter_rdwr_test.sv
+/tmp/xbuild/xilinx_pcie/tests/xilinx_pcie_adapter_backpressure_test.sv
+/tmp/xbuild/xilinx_pcie/tests/xilinx_pcie_adapter_err_poisoned_test.sv
 /tmp/xbuild/xilinx_pcie/tb/tb_adapter_top.sv
