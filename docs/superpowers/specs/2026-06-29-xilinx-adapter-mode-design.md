@@ -61,44 +61,49 @@
 
 **职责：** 一个实例服务一个 pcie_tl agent，承载该 agent 的全部 4 个 Xilinx AXIS 通道，做 `pcie_tl_tlp` ⟷ Xilinx AXIS beat 的双向转换。
 
+**集成方式（已定）：方案 A2 —— adapter 内包 4 个 `axis_agent`**，复用 axis_vip 的 master/slave 驱动（tready 握手 + 复位）与现有编解码逻辑，而非裸 vif 驱动。
+
 **成员：**
-- 4 个 `virtual axis_if`（rq/rc/cq/cc，按通道 TUSER 宽度参数化）
-- `xilinx_tuser_codec` / `xilinx_straddle_engine` / `xilinx_pcie_channel_router`（desc codec 视实现并入或独立）
+- 4 个 `axis_agent`（rq/rc/cq/cc，类型按通道 TUSER 宽度参数化，即现 `axis_agent_rq_t` 等），master/slave 模式由 role+channel 决定（沿用 `create_axis_config`）
+- `xilinx_tuser_codec` / `xilinx_straddle_engine` / `xilinx_pcie_channel_router`
 - `xilinx_pcie_role_e role`（RC/EP）—— 由实例名判定
-- `pcie_tl_tlp rx_queue[$]` —— RX 采样线程与 receive() 之间的缓冲
+- 复用现 driver 的 `send_beats`/`encode_descriptor`/`encode_tuser_for_beat` 与现 monitor 的 `decode_packet` 逻辑（吸收进 adapter，调用相同 codec 静态/实例方法）
+- `pcie_tl_tlp rx_queue[$]` —— 4 个 SLAVE 通道 monitor 解码出的 TLP 缓冲，receive() 从此 pop
 
 **build_phase：**
-1. 从 config_db 取 4 个 axis vif（key 约定见 §4.3）。
-2. 由 `get_name()` 含 `rc_adapter` / `ep_adapter` 判定 role。
-3. `mode = SV_IF_MODE`。
+1. 取 cfg（DATA_WIDTH/role 相关）；由 `get_name()` 含 `rc_adapter`/`ep_adapter` 判 role。
+2. 建 4 个 axis_agent（各通道 `create_axis_config(channel)` 设 master/slave）。
+3. 建 tuser_codec/straddle_eng/router。
+4. `mode = SV_IF_MODE`。
 
-**run_phase（override，super + fork）：**
-- fork 2 个 RX 采样线程，各盯一个**入**通道：采样 AXIS beat → 组包 → tuser/straddle/desc 解码 → `pcie_tl_tlp` → 压 `rx_queue`。
-- （保留基类 `fc_credit_sync` 若 vif 暴露 FC 信号；Xilinx 侧无则跳过。）
+**connect_phase：**
+- 4 个 axis_agent 的 monitor `packet_ap` 连到 adapter 的 4 个 analysis_imp（rq/rc/cq/cc），回调内 `decode_packet(pkt,ch)` → `pcie_tl_tlp` → `rx_queue.push_back`。
+- MASTER 通道 agent 的 sequencer 句柄存下，供 send() 用。
 
 **send(tlp)（override task）：**
-1. `router` 按 `role` + `tlp.kind` 选**出**通道。
-2. 用 desc/tuser/straddle codec 编码为 beat 序列。
-3. 驱该通道 AXIS（tvalid/tlast/tuser/tkeep，等 tready）。
-- 单线程串行（base_driver 串行调用），同 agent 的两出通道串行——功能 BFM 可接受。
+1. `channel = router.get_tx_channel(tlp)`（RC: cpl→RC,else→CQ；EP: cpl→CC,else→RQ）。
+2. `encode_descriptor` + `straddle_eng.pack_single_tlp` + 逐 beat `encode_tuser_for_beat`。
+3. `send_beats` 经该通道 MASTER agent 的 sequencer 发 `axis_transfer`（axis_vip 处理 tready）。
+- base_driver 串行调用，同 agent 两出通道串行——功能 BFM 可接受。
 
 **receive(tlp)（override task）：**
 - 非阻塞 `if (rx_queue.size()>0) tlp = rx_queue.pop_front(); else tlp = null;`。
+- rx_queue 由 axis monitor 回调（SVA 事件驱动）填充，与 base_monitor 的 receive 轮询解耦，自然解决"单 receive 盯 2 入通道"。
 
-**role → 通道方向：**
+**role → 通道方向（按 `xilinx_pcie_channel_router`，权威）：**
 
-| role | 出通道（send 路由目标） | 入通道（RX 采样线程） |
+| role | MASTER（驱动/send） | SLAVE（采样/receive→rx_queue） |
 |---|---|---|
-| RC | RQ（请求）、CC（自身完成） | RC（收到的完成）、CQ（收到的请求） |
-| EP | CC（完成）、RQ（DMA 请求） | CQ（收到的请求）、RC（收到的完成） |
+| RC | RC（完成）、CQ（请求） | RQ（收到请求）、CC（收到完成） |
+| EP | RQ（请求）、CC（完成） | CQ（收到请求）、RC（收到完成） |
 
-> 出通道按 `tlp.kind`：completion 类 → CC；request 类 → RQ。router 已有该映射，吸收复用。
+> send 通道由 `router.get_tx_channel(tlp)` 按类别选；receive 侧 4 个通道 monitor 都连 imp，但仅 SLAVE 通道有入流量。
 
 ### 4.3 env / tb 接线
 
 - tb 例化 pcie_tl_vip 的 `pcie_tl_env`（非 xilinx env）。
 - 每 agent 4 个 `axis_if`；RC 的出口总线物理上即 EP 的入口总线（沿用现 `connect.svh` 的 4 通道交叉接线：RC.RQ↔EP.CQ、EP.CC↔RC.RC 等）。
-- 连线宏改为把每个 vif 通过 `uvm_config_db#(virtual axis_if#(...))::set` 注册到 adapter 路径，例如 `uvm_test_top.env.rc_adapter*` 的 `rq_vif`/`rc_vif`/`cq_vif`/`cc_vif`。
+- 连线宏改为把每个通道 vif 注册到 adapter 内 axis_agent 的 config_db 路径，例如 `uvm_config_db#(virtual axis_if#(...))::set(null,"uvm_test_top.env.rc_adapter*.cq_agent*","vif",...)`（沿用 axis_agent 取 vif 的既有机制）。
 - test `build_phase` 顶部：`set_type_override_by_type(pcie_tl_if_adapter::get_type(), xilinx_pcie_if_adapter::get_type())`。
 - `codec` 注入：env 已设 `adapter.codec = codec`（通用 codec，用于 base_driver 的 BW 计数）；Xilinx 帧编解码在 adapter 内部独立完成，二者不冲突。
 
@@ -107,14 +112,14 @@
 ```
 RC seq → rc_agent.sequencer → base_driver.send_tlp(MRd)
   → tag/ordering/FC → codec.encode(BW计数) → rc_adapter.send(MRd)
-  → router: MRd=request,RC role → RQ 通道 → desc/tuser/straddle 编码 → 驱 RQ AXIS
-        ↓ (物理总线: RC.RQ = EP.CQ)
-EP rx 采样线程(盯 CQ) → 解码 → pcie_tl_tlp(MRd) → ep_adapter.rx_queue
+  → router.get_tx_channel: MRd=request,RC → CQ 通道(MASTER) → desc/tuser/straddle 编码 → 驱 CQ AXIS
+        ↓ (物理总线: RC.cq_if ↔ EP.cq_if, EP 侧 SLAVE)
+EP cq_agent.monitor → axis_packet → ep_adapter.cq_imp → decode_packet → pcie_tl_tlp(MRd) → ep rx_queue
   → ep base_monitor.receive() pop → 协议检查 → tlp_ap → (pcie_tl_vip ep_driver 自动响应)
   → ep_driver 生成 CplD → ep base_driver.send_tlp(CplD)
-  → ep_adapter.send(CplD): completion→CC 通道 → 编码 → 驱 CC AXIS
-        ↓ (物理总线: EP.CC = RC.RC)
-RC rx 采样线程(盯 RC) → 解码 → CplD → rc_adapter.rx_queue
+  → ep_adapter.send(CplD): router=CC 通道(MASTER) → 编码 → 驱 CC AXIS
+        ↓ (物理总线: EP.cc_if ↔ RC.cc_if, RC 侧 SLAVE)
+RC cc_agent.monitor → axis_packet → rc_adapter.cc_imp → decode_packet → CplD → rc rx_queue
   → rc base_monitor.receive() pop → pcie_tl_vip 释放 tag/outstanding + scoreboard
 ```
 
