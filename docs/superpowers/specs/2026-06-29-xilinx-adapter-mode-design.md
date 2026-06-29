@@ -10,7 +10,12 @@
 
 **目标终态：** 把 `xilinx_pcie` 收敛为**纯 Xilinx 接口 adapter**——只负责 Xilinx PG213 的 4 通道 AXI-Stream（RQ/RC/CQ/CC）⟷ 抽象 `pcie_tl_tlp` 的编解码与通道路由。所有协议逻辑委托 `pcie_tl_vip`。
 
-**非目标：** 不改 `pcie_tl_vip`；不引入新协议特性；不做 TLM 模式（采用 SV_IF 模式）。
+**非目标：** 不改 `pcie_tl_vip` 的协议逻辑；不引入新协议特性；不做 TLM 模式（采用 SV_IF 模式）。
+
+**修订（2026-06-29，PoC 后）：** PoC 闸门已**通过**——Xilinx adapter 经工厂覆盖接入 pcie_tl_vip，1RC+1EP MemWr/MemRd 端到端跑通（RC 请求→AXIS→EP 自动响应→CplD→RC，`UVM_FATAL=0`）。PoC 暴露三项需在本实现内处理的事实：
+1. **pcie_tl_vip 需最小 hook 补丁**：基类 `pcie_tl_if_adapter::send/receive` 非 virtual，工厂 override 不分派 → 给这两个方法加 `virtual`。已决策：接受此最小补丁，正式提交到 `pcie_work` repo（不改其协议逻辑）。非目标据此放宽为"仅最小 hook 补丁"。
+2. **上游 scoreboard 在 SV_IF 模式不工作**：其 completion 匹配靠 `register_pending()`，仅在 env 的 TLM loopback 路径运行（SV_IF 模式关）。已决策：本 repo 保留**薄 Xilinx checker**做端到端校验，不依赖上游 scoreboard 的 TLM 假设（更贴"接口层只管转换"）。
+3. **Xilinx desc codec 缺 Config-TLP**：`enum_then_dma` 用 CfgRd/CfgWr，codec 不支持 → PoC 用 MemWr/MemRd 等价证明 gate。已决策：新增 codec Cfg 编解码任务，排在删旧栈之前。
 
 ## 2. 决策（已定）
 
@@ -18,7 +23,7 @@
 |---|---|
 | 终态范围 | **完全替换**：删 xilinx 的 env/agent/driver/monitor/scoreboard/seq/collector/中断 agent，协议层委托 pcie_tl_vip |
 | pcie_tl_vip 消费 | **外部引用维现状**：filelist include 外部 `pcie_work/pcie_tl_vip` 源，本 repo 不拷贝 |
-| 测试策略 | **复用 pcie_tl_vip seq 库 + scoreboard + 薄 Xilinx smoke** |
+| 测试策略 | **pcie_tl_vip seq 库激励 + 薄 Xilinx checker**（PoC 后修订：上游 scoreboard 依赖 TLM loopback，SV_IF 模式不可用，故用薄 checker；见修订 2） |
 | 集成方案 | **方案 A：子类吸收式** —— `xilinx_pcie_if_adapter extends pcie_tl_if_adapter`，吸收 codec+router+4 通道驱动/采样；pcie_tl_vip agent/driver/monitor 原样复用 |
 
 ## 3. 上游约束（来自 pcie_tl_vip，已核实）
@@ -132,7 +137,9 @@ RC cc_agent.monitor → axis_packet → rc_adapter.cc_imp → decode_packet → 
 ## 5. 测试
 
 - **薄 Xilinx smoke**（`xilinx_pcie_adapter_smoke_test`）：验 adapter 编解码往返正确（每通道一条代表 TLP：MWr/MRd→CplD/CfgRd→CplD/straddle 多 TLP），4 通道 role 映射正确，straddle 开/关两态。
-- **协议激励**：复用 pcie_tl_vip seq 库（`enum_then_dma_vseq`、`rc_ep_rdwr_vseq`、`backpressure_vseq`、`err_*_seq`）+ pcie_tl_vip scoreboard 做端到端 + 错误注入。
+- **协议激励**：复用 pcie_tl_vip seq 库（`enum_then_dma_vseq`、`rc_ep_rdwr_vseq`、`backpressure_vseq`、`err_*_seq`）做端到端 + 错误注入。
+- **端到端校验**：薄 Xilinx checker（订阅两侧 adapter 解码出的 TLP，匹配 req↔cpl + payload）。**不**用上游 scoreboard（其 `register_pending` 仅在 TLM loopback 跑，SV_IF 模式无效）。
+- **enum 类场景前置**：需先完成 codec Cfg 编解码任务，`enum_then_dma` 才能跑。
 - **回归环境**：远程 VCS `ryan@10.11.10.61:2222`，`/tmp/xbuild`，DATA_WIDTH ∈ {256,512}。
 - **判据**：smoke + 选定 pcie_tl_vip 场景 `UVM_ERROR=0 / UVM_FATAL=0`（错误注入场景按其自身判据）。
 

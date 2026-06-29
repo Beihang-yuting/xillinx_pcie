@@ -433,6 +433,27 @@ git commit -m "docs(xilinx-pcie): rewrite guide for adapter mode + regression ma
 
 ---
 
+## 实施修订（2026-06-29，PoC 后）
+
+**进度：** Task 0 ✅（`f9652fa` filelist+骨架，vcs rc=0）。Task 1 PoC ✅ **闸门通过**（`c3d2124`，1RC+1EP MemWr/MemRd 端到端，`UVM_FATAL=0`，CplD 回到 RC 匹配）。
+
+**PoC 暴露的三项事实 + 已批准决策**，据此调整后续任务：
+
+- **新增 Task 1.5 — pcie_tl_vip 最小补丁正式化**（在 Task 2 前）：
+  - `pcie_work/pcie_tl_vip/src/adapter/pcie_tl_if_adapter.sv`：`send()`/`receive()` 加 `virtual`（否则工厂 override 不分派）。
+  - `pcie_work/pcie_tl_vip/src/seq/virtual/pcie_tl_enum_then_dma_vseq.sv`：`max_payload=0` → `chunk=0` 死循环，设 `max_payload=256`。
+  - 这两处目前只在 `/tmp/xbuild`。须正式提交到 `pcie_work` repo（`Beihang-yuting/pcie_work`），并更新本计划 §依赖锁定的 commit。只动 hook/bug，不改协议逻辑。
+
+- **新增 Task 4.5 — codec Config-TLP 支持**（在删旧栈 Task 6 前）：给 `xilinx_desc_codec` + `xilinx_tuser_codec` 加 CfgRd0/CfgWr0/CfgRd1/CfgWr1 编解码（RQ/CQ 通道），使 `enum_then_dma` 可跑。补 smoke 一条 Cfg round-trip。
+
+- **改 Task 4/5 测试策略** → **薄 Xilinx checker**：不用上游 scoreboard（`register_pending` 仅 TLM loopback，SV_IF 无效）。写一个 `xilinx_pcie_e2e_checker`（uvm_subscriber，订阅两侧 adapter 解码 TLP，匹配 req↔cpl + payload），替代 PoC 里临时的 auto-response subscriber。Task 5 场景回归用它判端到端。
+
+- **改 Task 1 收尾（tb 卫生）**：UVM `$finish` 后时钟/driver 不静默致日志暴涨。PoC 已加 200us timeout 兜底；Task 2 顺带加 `final`/`$finish` 后停时钟 + 关 driver fork，使 sim 干净退出（不再 1.2GB 日志）。
+
+**调整后任务顺序：** Task 1.5（vip 补丁正式化）→ Task 2（send 全类型 + tb 卫生）→ Task 3（receive 稳健化）→ Task 4（薄 checker）→ Task 4.5（codec Cfg）→ Task 5（pcie_tl_vip 场景回归，含 enum_then_dma）→ Task 6（删旧栈，**删前向用户确认**）→ Task 7（文档+memory+回归矩阵）。
+
+> 注：Task 6 删整个旧协议栈（30+ 文件），属不可逆大动作，执行前单独向用户确认。
+
 ## Self-Review
 
 - **Spec 覆盖**：§4.1 文件构成→Task 0/6；§4.2 adapter→Task 1/2/3；§4.3 接线→Task 1 Step3/4；§4.4 数据流→Task 1 PoC；§5 测试→Task 4/5；§6 PoC 闸门→Task 1。无缺口。
