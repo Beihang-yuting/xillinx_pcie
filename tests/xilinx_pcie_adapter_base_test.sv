@@ -53,8 +53,8 @@ class xilinx_pcie_adapter_base_test extends uvm_test;
 
   pcie_tl_env                  env;
   pcie_tl_env_config           cfg;
-  xilinx_adapter_poc_responder ep_resp;
-  xilinx_adapter_poc_responder rc_resp;
+  xilinx_adapter_poc_responder ep_resp;     // EP auto-response glue (-> ep_driver)
+  xilinx_pcie_e2e_checker      e2e_chk;     // end-to-end req/cpl match checker
 
   function new(string n, uvm_component p); super.new(n, p); endfunction
 
@@ -81,17 +81,19 @@ class xilinx_pcie_adapter_base_test extends uvm_test;
 
     env     = pcie_tl_env::type_id::create("env", this);
     ep_resp = xilinx_adapter_poc_responder::type_id::create("ep_resp", this);
-    rc_resp = xilinx_adapter_poc_responder::type_id::create("rc_resp", this);
+    e2e_chk = xilinx_pcie_e2e_checker::type_id::create("e2e_chk", this);
   endfunction
 
   function void connect_phase(uvm_phase phase);
     super.connect_phase(phase);
-    // EP: requests -> ep_driver.handle_request
+    // EP auto-response: requests arriving at EP -> ep_driver.handle_request
     ep_resp.ep_drv = env.ep_agent.ep_driver;
     env.ep_agent.monitor.tlp_ap.connect(ep_resp.analysis_export);
-    // RC: completions -> rc_driver.handle_completion
-    rc_resp.rc_drv = env.rc_agent.rc_driver;
-    env.rc_agent.monitor.tlp_ap.connect(rc_resp.analysis_export);
+    // End-to-end checker: requests tapped on the completer (EP) side, completions
+    // tapped on the requester (RC) side, matched by tag. Replaces the old
+    // rc_resp/rc_driver.handle_completion ad-hoc completion-match path.
+    env.ep_agent.monitor.tlp_ap.connect(e2e_chk.req_imp);
+    env.rc_agent.monitor.tlp_ap.connect(e2e_chk.cpl_imp);
   endfunction
 
   task run_phase(uvm_phase phase);

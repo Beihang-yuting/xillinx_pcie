@@ -33,5 +33,10 @@ package xilinx_pcie_adapter_pkg;
 
   // The interface adapter (wraps 4 axis_agents, absorbs encode/decode)
   `include "adapter/xilinx_pcie_if_adapter.sv"
+
+  // End-to-end TLP checker (req/cpl match) — lives in src/check/ so it survives
+  // the Task 6 deletion of src/env/. Resolves via the +incdir+.../src already in
+  // filelist_adapter.f (same as the codec/ and adapter/ includes above).
+  `include "check/xilinx_pcie_e2e_checker.sv"
 endpackage
 `endif
