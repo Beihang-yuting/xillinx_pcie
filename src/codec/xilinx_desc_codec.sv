@@ -32,6 +32,10 @@ class xilinx_desc_codec;
             TLP_ATOMIC_FETCHADD:  return XILINX_REQ_FETCH_ADD; // 原子 FetchAdd
             TLP_ATOMIC_SWAP:      return XILINX_REQ_SWAP;      // 原子 Swap
             TLP_ATOMIC_CAS:       return XILINX_REQ_CAS;       // 原子 CAS
+            TLP_CFG_RD0:          return XILINX_REQ_CFGRD0;    // Type0 配置读
+            TLP_CFG_WR0:          return XILINX_REQ_CFGWR0;    // Type0 配置写
+            TLP_CFG_RD1:          return XILINX_REQ_CFGRD1;    // Type1 配置读
+            TLP_CFG_WR1:          return XILINX_REQ_CFGWR1;    // Type1 配置写
             default: begin
                 `uvm_error("XILINX_CODEC",
                     $sformatf("kind_to_req_type: 不支持的 TLP 种类 %s", kind.name()))
@@ -52,6 +56,10 @@ class xilinx_desc_codec;
             XILINX_REQ_FETCH_ADD: return TLP_ATOMIC_FETCHADD;  // 原子 FetchAdd
             XILINX_REQ_SWAP:      return TLP_ATOMIC_SWAP;      // 原子 Swap
             XILINX_REQ_CAS:       return TLP_ATOMIC_CAS;       // 原子 CAS
+            XILINX_REQ_CFGRD0:    return TLP_CFG_RD0;          // Type0 配置读
+            XILINX_REQ_CFGWR0:    return TLP_CFG_WR0;          // Type0 配置写
+            XILINX_REQ_CFGRD1:    return TLP_CFG_RD1;          // Type1 配置读
+            XILINX_REQ_CFGWR1:    return TLP_CFG_WR1;          // Type1 配置写
             default: begin
                 `uvm_error("XILINX_CODEC",
                     $sformatf("req_type_to_kind: 未知 req_type 0x%0h", req_type))
@@ -86,6 +94,112 @@ class xilinx_desc_codec;
 
     //=========================================================================
     // -------------------------------------------------------------------------
+    // Config-TLP 辅助：CfgRd0/CfgWr0/CfgRd1/CfgWr1 走 RQ(发) / CQ(收) 通道，
+    // 复用 128 位请求描述符家族。配置请求不携带 BAR 定位信息，故 RQ 与 CQ 的
+    // 配置描述符布局完全相同，由下面的 encode_cfg_desc/decode_cfg_desc 共享。
+    //
+    // 配置请求描述符字段放置（ASSUMPTION，见文件头/报告）：PG213 把配置请求的
+    // register-number/BDF 放在内存请求描述符的地址区。此处按类比放置——
+    //   [11:2]    reg_num[9:0]      DW 寄存器号（= 内存路径 addr[11:2]，DW 对齐）
+    //   [63:48]   completer_id[15:0] 目标 BDF（放在地址高 DW 区）
+    //   [111:108] first_dw_be       首 DW 字节使能（与内存 RQ 同位置）
+    // 其余 length/req_type/ep_bit/requester_id/tag/attr/tc/td 与内存 RQ 同位置。
+    // encode 与 decode 对称，BFM 内部往返自洽。
+    // -------------------------------------------------------------------------
+
+    // is_cfg_kind: 判断 tlp_kind_e 是否为配置请求种类
+    static function bit is_cfg_kind(tlp_kind_e kind);
+        return (kind == TLP_CFG_RD0 || kind == TLP_CFG_WR0 ||
+                kind == TLP_CFG_RD1 || kind == TLP_CFG_WR1);
+    endfunction : is_cfg_kind
+
+    // is_cfg_req_type: 判断 req_type 编码是否为配置请求
+    static function bit is_cfg_req_type(xilinx_req_type_e rt);
+        return (rt == XILINX_REQ_CFGRD0 || rt == XILINX_REQ_CFGWR0 ||
+                rt == XILINX_REQ_CFGRD1 || rt == XILINX_REQ_CFGWR1);
+    endfunction : is_cfg_req_type
+
+    // encode_cfg_desc: 将配置请求 TLP 编码为 128 位请求描述符（RQ/CQ 共用）
+    static function bit [127:0] encode_cfg_desc(pcie_tl_tlp tlp);
+        bit [127:0]      desc;
+        pcie_tl_cfg_tlp  cfg;
+
+        desc = '0;
+        if (!$cast(cfg, tlp)) begin
+            `uvm_error("XILINX_CODEC",
+                "encode_cfg_desc: tlp 无法转型为 pcie_tl_cfg_tlp")
+            return '0;
+        end
+
+        // [11:2]    reg_num：DW 寄存器号（配置空间字节地址 = {reg_num,2'b00}）
+        desc[11:2]    = cfg.reg_num;
+        // [63:48]   completer_id：目标 BDF
+        desc[63:48]   = cfg.completer_id;
+        // [74:64]   length：配置请求恒为 1 DW
+        desc[74:64]   = tlp.length;
+        // [78:75]   req_type：配置请求类型编码
+        desc[78:75]   = kind_to_req_type(tlp.kind);
+        // [79]      ep_bit：Poisoned 位
+        desc[79]      = tlp.ep_bit;
+        // [95:80]   requester_id：请求方 BDF
+        desc[95:80]   = tlp.requester_id;
+        // [103:96]  tag[7:0]：Tag 低 8 位（高 2 位经 tuser 携带）
+        desc[103:96]  = tlp.tag[7:0];
+        // [111:108] first_dw_be：首 DW 字节使能
+        desc[111:108] = cfg.first_be;
+        // [114:112] attr：属性字段
+        desc[114:112] = tlp.attr;
+        // [117:115] tc：流量类别
+        desc[117:115] = tlp.tc;
+        // [127]     td：TLP Digest 标志
+        desc[127]     = tlp.td;
+
+        return desc;
+    endfunction : encode_cfg_desc
+
+    // decode_cfg_desc: 将 128 位配置请求描述符解码为 pcie_tl_cfg_tlp（RQ/CQ 共用）
+    static function pcie_tl_tlp decode_cfg_desc(bit [127:0] desc, bit [7:0] payload[]);
+        pcie_tl_cfg_tlp   cfg;
+        xilinx_req_type_e req_type;
+        bit               has_data;
+
+        cfg = pcie_tl_cfg_tlp::type_id::create("cfg_decoded");
+
+        req_type    = xilinx_req_type_e'(desc[78:75]);
+        has_data    = (payload.size() > 0);
+        cfg.kind    = req_type_to_kind(req_type, has_data);
+
+        // type_f：Type0 / Type1 配置请求
+        if (cfg.kind == TLP_CFG_RD1 || cfg.kind == TLP_CFG_WR1)
+            cfg.type_f = TLP_TYPE_CFG_RD1;
+        else
+            cfg.type_f = TLP_TYPE_CFG_RD0;
+
+        // 配置请求 fmt 固定为 3DW；写带数据、读不带数据
+        cfg.fmt = has_data ? FMT_3DW_WITH_DATA : FMT_3DW_NO_DATA;
+
+        // 字段还原（与 encode_cfg_desc 对称）
+        cfg.reg_num      = desc[11:2];
+        cfg.completer_id = desc[63:48];
+        cfg.length       = desc[74:64];
+        cfg.ep_bit       = desc[79];
+        cfg.requester_id = desc[95:80];
+        cfg.tag          = {2'b00, desc[103:96]};
+        cfg.first_be     = desc[111:108];
+        cfg.attr         = desc[114:112];
+        cfg.tc           = desc[117:115];
+        cfg.td           = desc[127];
+
+        // 复制 payload 字节数组（CfgWr 携带 1 DW）
+        cfg.payload = new[payload.size()];
+        foreach (payload[i])
+            cfg.payload[i] = payload[i];
+
+        return cfg;
+    endfunction : decode_cfg_desc
+
+    //=========================================================================
+    // -------------------------------------------------------------------------
     // RQ 通道编解码：Requester Request 描述符（128 位）
     // 参考 PG213 Table 2-22 (RQ Descriptor)
     // 仅适用于内存/IO/原子操作请求类型
@@ -104,6 +218,10 @@ class xilinx_desc_codec;
 
         // 初始化描述符为全零
         desc = '0;
+
+        // 配置请求：走专用配置描述符布局（不携带地址）
+        if (is_cfg_kind(tlp.kind))
+            return encode_cfg_desc(tlp);
 
         // 根据 TLP 子类类型提取地址和字节使能字段
         if ($cast(mem_tlp, tlp)) begin
@@ -178,6 +296,10 @@ class xilinx_desc_codec;
         xilinx_req_type_e req_type;
         bit               has_data;
         bit               is_64bit;
+
+        // 配置请求：走专用配置解码，返回 pcie_tl_cfg_tlp
+        if (is_cfg_req_type(xilinx_req_type_e'(desc[78:75])))
+            return decode_cfg_desc(desc, payload);
 
         // 通过 UVM 工厂创建 pcie_tl_mem_tlp 对象（支持 factory override）
         tlp = pcie_tl_mem_tlp::type_id::create("rq_decoded");
@@ -424,6 +546,10 @@ class xilinx_desc_codec;
         // 初始化描述符为全零
         desc = '0;
 
+        // 配置请求：走专用配置描述符布局（与 RQ 共用，不携带 BAR 信息）
+        if (is_cfg_kind(tlp.kind))
+            return encode_cfg_desc(tlp);
+
         // 根据 TLP 子类提取地址和字节使能（与 RQ 相同逻辑）
         if ($cast(mem_tlp, tlp)) begin
             addr     = mem_tlp.addr;
@@ -497,6 +623,10 @@ class xilinx_desc_codec;
         xilinx_req_type_e req_type;
         bit               has_data;
         bit               is_64bit;
+
+        // 配置请求：走专用配置解码，返回 pcie_tl_cfg_tlp
+        if (is_cfg_req_type(xilinx_req_type_e'(desc[78:75])))
+            return decode_cfg_desc(desc, payload);
 
         // 通过 UVM 工厂创建 pcie_tl_mem_tlp 对象（支持 factory override）
         tlp = pcie_tl_mem_tlp::type_id::create("cq_decoded");

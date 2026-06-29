@@ -91,7 +91,11 @@ class xilinx_pcie_e2e_checker extends uvm_component;
 
     o = outstanding[c.tag];
     // For read-data completions, byte_count must echo the requested length.
-    if (c.has_data() && c.byte_count != o.expected_bytes[11:0]) begin
+    // Config-read completions are exempt: PCIe fixes their Byte Count at 4 and
+    // the upstream ep_driver leaves cpl.byte_count at 0, so the generic
+    // length-echo does not apply. Tag match + returned data still prove delivery.
+    if (c.has_data() && !(o.kind inside {TLP_CFG_RD0, TLP_CFG_RD1}) &&
+        c.byte_count != o.expected_bytes[11:0]) begin
       n_mismatch++;
       `uvm_error(get_type_name(), $sformatf(
         "completion byte_count mismatch: tag=0x%03h got=%0d expected=%0d",

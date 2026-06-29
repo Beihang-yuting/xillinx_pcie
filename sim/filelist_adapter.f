@@ -14,4 +14,6 @@
 /tmp/xbuild/xilinx_pcie/src/interface/xilinx_pcie_cfg_if.sv
 /tmp/xbuild/xilinx_pcie/tests/xilinx_pcie_adapter_base_test.sv
 /tmp/xbuild/xilinx_pcie/tests/xilinx_pcie_adapter_smoke_test.sv
+/tmp/xbuild/xilinx_pcie/tests/xilinx_pcie_adapter_cfg_test.sv
+/tmp/xbuild/xilinx_pcie/tests/xilinx_pcie_adapter_enum_dma_test.sv
 /tmp/xbuild/xilinx_pcie/tb/tb_adapter_top.sv

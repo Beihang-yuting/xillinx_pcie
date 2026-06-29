@@ -56,7 +56,11 @@ typedef enum bit [3:0] {
     XILINX_REQ_MRD_LK    = 4'b0100,   // Memory Read Locked 请求
     XILINX_REQ_FETCH_ADD = 4'b1000,   // AtomicOp FetchAdd 原子操作
     XILINX_REQ_SWAP      = 4'b1001,   // AtomicOp Swap 原子操作
-    XILINX_REQ_CAS       = 4'b1010    // AtomicOp Compare-and-Swap 原子操作
+    XILINX_REQ_CAS       = 4'b1010,   // AtomicOp Compare-and-Swap 原子操作
+    XILINX_REQ_CFGRD0    = 4'b1100,   // Type 0 Configuration Read 请求
+    XILINX_REQ_CFGWR0    = 4'b1101,   // Type 0 Configuration Write 请求
+    XILINX_REQ_CFGRD1    = 4'b1110,   // Type 1 Configuration Read 请求
+    XILINX_REQ_CFGWR1    = 4'b1111    // Type 1 Configuration Write 请求
 } xilinx_req_type_e;
 
 //-----------------------------------------------------------------------------
