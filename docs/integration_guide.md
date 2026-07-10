@@ -255,6 +255,7 @@ ssh -p 2222 ryan@10.11.10.61 'source ~/set-env.sh >/dev/null 2>&1
 1. `pcie_tl_if_adapter::send()` / `receive()` 加 `virtual` —— 否则工厂 override 不分派。
 2. `pcie_tl_enum_then_dma_vseq` 的 `max_payload=0` → `chunk=0` 死循环，修为 `max_payload=256`。
 
+> **§2.3 多 agent（num_rc/num_ep）需要 `pcie_work` main 含 reconcile**（PR #5，合并 sha `52ea845`）—— 更早的 commit（含上述 `d7f1f3c`）**没有** `num_rc`/`num_ep`，只能跑单 RC+EP 或 switch 多根。集成多-agent 时把 `pcie_work` 锁到 ≥ 该合并点。
 > 上游 pcie_tl_vip 活跃开发（multi-root/pf-vf/link-delay），集成/回归前锁定一个已知能编译的 commit。
 
 ---
