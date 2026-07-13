@@ -38,5 +38,9 @@ package xilinx_pcie_adapter_pkg;
   // the Task 6 deletion of src/env/. Resolves via the +incdir+.../src already in
   // filelist_adapter.f (same as the codec/ and adapter/ includes above).
   `include "check/xilinx_pcie_e2e_checker.sv"
+
+  // Interrupt agent (cfg_interrupt sideband, PG213) — self-contained, drives EP
+  // send tasks + models the local PCIe-IP sent/fail response. No env_config dep.
+  `include "agent/xilinx_pcie_interrupt_agent.sv"
 endpackage
 `endif
