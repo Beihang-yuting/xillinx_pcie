@@ -23,4 +23,5 @@
 /tmp/xbuild/xilinx_pcie/tests/xilinx_pcie_adapter_no_rc_test.sv
 /tmp/xbuild/xilinx_pcie/tests/xilinx_pcie_adapter_rw_readback_test.sv
 /tmp/xbuild/xilinx_pcie/tests/xilinx_pcie_adapter_interrupt_test.sv
+/tmp/xbuild/xilinx_pcie/tests/xilinx_pcie_adapter_int_e2e_test.sv
 /tmp/xbuild/xilinx_pcie/tb/tb_adapter_top.sv
