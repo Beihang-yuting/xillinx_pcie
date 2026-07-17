@@ -108,6 +108,9 @@ class xilinx_tuser_codec;
         bit [5:0]   seq_num_0,
         bit [5:0]   seq_num_1,
         bit [1:0]   tag_9_8,
+        bit         sop,             // 512: is_sop[0] (TLP0 起始; narrow 用 tlast, 忽略)
+        bit         is_eop,          // 512: is_eop[0]
+        bit [3:0]   eop_ptr,         // 512: is_eop0_ptr[3:0] (DW 指针)
         bit [511:0] tdata
     );
         bit [284:0] tuser;           // 最大宽度返回值，未使用位填零
@@ -141,15 +144,15 @@ class xilinx_tuser_codec;
             // 512-bit 模式：137-bit tuser (straddle, PG213 Table 2-35)
             // 单 TLP/beat：字段映射到 TLP0 槽，TLP1 槽(first_be[7:4]/
             // last_be[15:12]/sop1_ptr/eop1_ptr/tph[1]/seq_num1)置 0。
-            // 注：is_sop/is_eop/ptr 需 beat 位置信息，encode_rq_tuser 签名未含
-            //    sop/eop 参数 -> 此处置 0。RQ 由 EP 驱动；host(RC) 角色下 RQ 为
-            //    decode-only，framing 用不到。EP 角色跑 512 straddle 时需扩展签名
-            //    并由 adapter 线程 sop/eop(另议)。
+            // is_sop[0]/is_eop[0]/is_eop0_ptr 由 adapter 按 beat 位置传入。
             // ---------------------------------------------------------------
             tuser[11:8]    = last_be;              // [11:8]   last_be (TLP0)
             tuser[19:16]   = {1'b0, addr_offset};  // [19:16]  addr_offset[3:0]
-            // [21:20] is_sop / [23:22] sop0_ptr / [25:24] sop1_ptr = 0 (见注)
-            // [27:26] is_eop / [31:28] eop0_ptr / [35:32] eop1_ptr = 0
+            tuser[20]      = sop;                  // [21:20] is_sop[0] (TLP0)
+            // [23:22] is_sop0_ptr = 0 (从 beat 边界起); [25:24] is_sop1_ptr = 0
+            tuser[26]      = is_eop;               // [27:26] is_eop[0]
+            tuser[31:28]   = eop_ptr;              // [31:28] is_eop0_ptr[3:0]
+            // [35:32] is_eop1_ptr = 0
             tuser[36]      = discontinue;          // [36]     discontinue
             tuser[37]      = tph_present;          // [38:37]  tph_present[1:0] (TLP0=37)
             tuser[40:39]   = tph_type;             // [42:39]  tph_type[3:0] (TLP0=[40:39])
@@ -260,9 +263,9 @@ class xilinx_tuser_codec;
         bit         is_sof_0,
         bit         is_sof_1,
         bit         is_eof_0,
-        bit [2:0]   eof_offset_0,
+        bit [3:0]   eof_offset_0,    // 512: is_eop0_ptr[3:0] (DW 指针 0~15)
         bit         is_eof_1,
-        bit [2:0]   eof_offset_1,
+        bit [3:0]   eof_offset_1,
         bit         discontinue,
         bit [511:0] tdata
     );
@@ -299,8 +302,8 @@ class xilinx_tuser_codec;
             tuser[65:64]   = {is_sof_1, is_sof_0};   // [67:64]  is_sop[3:0] (slot0/1)
             // [69:68]/[71:70]/[73:72]/[75:74] is_sop0..3_ptr = 0 (从 beat 边界起)
             tuser[77:76]   = {is_eof_1, is_eof_0};   // [79:76]  is_eop[3:0] (slot0/1)
-            tuser[82:80]   = eof_offset_0;           // [83:80]  is_eop0_ptr[3:0] (低 3 位)
-            tuser[86:84]   = eof_offset_1;           // [87:84]  is_eop1_ptr[3:0] (低 3 位)
+            tuser[83:80]   = eof_offset_0;           // [83:80]  is_eop0_ptr[3:0]
+            tuser[87:84]   = eof_offset_1;           // [87:84]  is_eop1_ptr[3:0]
             // [91:88]/[95:92] is_eop2/3_ptr = 0
             tuser[96]      = discontinue;            // [96]     discontinue
             tuser[160:97]  = parity[63:0];           // [160:97] parity (64 bits)
@@ -317,9 +320,9 @@ class xilinx_tuser_codec;
         output bit         is_sof_0,
         output bit         is_sof_1,
         output bit         is_eof_0,
-        output bit [2:0]   eof_offset_0,
+        output bit [3:0]   eof_offset_0,
         output bit         is_eof_1,
-        output bit [2:0]   eof_offset_1,
+        output bit [3:0]   eof_offset_1,
         output bit         discontinue
     );
         // 初始化输出为全零
@@ -349,9 +352,9 @@ class xilinx_tuser_codec;
             is_sof_0      = tuser[64];       // is_sop[0]
             is_sof_1      = tuser[65];       // is_sop[1]
             is_eof_0      = tuser[76];       // is_eop[0]
-            eof_offset_0  = tuser[82:80];    // is_eop0_ptr 低 3 位
+            eof_offset_0  = tuser[83:80];    // is_eop0_ptr[3:0]
             is_eof_1      = tuser[77];       // is_eop[1]
-            eof_offset_1  = tuser[86:84];    // is_eop1_ptr 低 3 位
+            eof_offset_1  = tuser[87:84];    // is_eop1_ptr[3:0]
             discontinue   = tuser[96];       // [96]    discontinue
 
         end
@@ -410,9 +413,9 @@ class xilinx_tuser_codec;
         bit [1:0]   tph_type,
         bit [7:0]   tph_st_tag,
         bit         is_eop,
-        bit [2:0]   eop_offset,
+        bit [3:0]   eop_offset,      // 512: is_eop0_ptr[3:0] (DW 指针 0~15)
         bit         is_eop_1,
-        bit [2:0]   eop_offset_1,
+        bit [3:0]   eop_offset_1,
         bit [1:0]   tag_9_8,
         bit [511:0] tdata
     );
@@ -460,8 +463,8 @@ class xilinx_tuser_codec;
             // [83:82] is_sop0_ptr = 0 (从 beat 边界起)；[85:84] is_sop1_ptr = 0
             tuser[86]      = is_eop;             // [86]     is_eop[0]
             tuser[87]      = is_eop_1;           // [87]     is_eop[1]
-            tuser[90:88]   = eop_offset;         // [91:88]  is_eop0_ptr[3:0] (低 3 位=eop_offset)
-            tuser[94:92]   = eop_offset_1;       // [95:92]  is_eop1_ptr[3:0]
+            tuser[91:88]   = eop_offset;         // [91:88]  is_eop0_ptr[3:0]
+            tuser[95:92]   = eop_offset_1;       // [95:92]  is_eop1_ptr[3:0]
             tuser[96]      = discontinue;        // [96]     discontinue
             tuser[97]      = tph_present;        // [98:97]  tph_present[1:0] (TLP0=bit97)
             tuser[100:99]  = tph_type;           // [102:99] tph_type[3:0] (TLP0=[100:99])
@@ -487,9 +490,9 @@ class xilinx_tuser_codec;
         output bit [1:0]   tph_type,
         output bit [7:0]   tph_st_tag,
         output bit         is_eop,
-        output bit [2:0]   eop_offset,
+        output bit [3:0]   eop_offset,
         output bit         is_eop_1,
-        output bit [2:0]   eop_offset_1,
+        output bit [3:0]   eop_offset_1,
         output bit [1:0]   tag_9_8
     );
         // 初始化输出
@@ -531,8 +534,8 @@ class xilinx_tuser_codec;
             sop_1         = tuser[81];        // [81]    is_sop[1]
             is_eop        = tuser[86];        // [86]    is_eop[0]
             is_eop_1      = tuser[87];        // [87]    is_eop[1]
-            eop_offset    = tuser[90:88];     // is_eop0_ptr 低 3 位
-            eop_offset_1  = tuser[94:92];     // is_eop1_ptr 低 3 位
+            eop_offset    = tuser[91:88];     // is_eop0_ptr[3:0]
+            eop_offset_1  = tuser[95:92];     // is_eop1_ptr[3:0]
             discontinue   = tuser[96];        // [96]    discontinue
             tph_present   = tuser[97];        // tph_present[0]
             tph_type      = tuser[100:99];    // tph_type[1:0]
@@ -563,6 +566,9 @@ class xilinx_tuser_codec;
     //   tdata       [511:0]  对应 AXI-Stream 数据（用于 parity 计算）
     function bit [160:0] encode_cc_tuser(
         bit         discontinue,
+        bit         sop,             // 512: is_sop[0] (narrow 用 tlast, 忽略)
+        bit         is_eop,          // 512: is_eop[0]
+        bit [3:0]   eop_ptr,         // 512: is_eop0_ptr[3:0]
         bit [511:0] tdata
     );
         bit [160:0] tuser;       // 最大宽度返回值
@@ -580,8 +586,12 @@ class xilinx_tuser_codec;
             //   is_sop[1:0]@[1:0] / is_sop0_ptr@[3:2] / is_sop1_ptr@[5:4]
             //   is_eop[1:0]@[7:6] / is_eop0_ptr@[11:8] / is_eop1_ptr@[15:12]
             //   discontinue@[16] / parity@[80:17]
-            // 注：is_sop/is_eop/ptr 需 beat 信息, encode_cc_tuser 签名无 -> 置 0。
-            //    CC 由 EP 驱动；host(CC=SLAVE) 为 decode-only。
+            // 单 TLP/beat：TLP0 槽由 adapter 传入 sop/is_eop/eop_ptr，TLP1 槽=0。
+            tuser[0]     = sop;              // [1:0]   is_sop[0] (TLP0)
+            // [3:2] is_sop0_ptr = 0; [5:4] is_sop1_ptr = 0
+            tuser[6]     = is_eop;           // [7:6]   is_eop[0]
+            tuser[11:8]  = eop_ptr;          // [11:8]  is_eop0_ptr[3:0]
+            // [15:12] is_eop1_ptr = 0
             tuser[16]    = discontinue;      // [16]    discontinue
             tuser[80:17] = parity[63:0];     // [80:17] parity (64 bits)
         end

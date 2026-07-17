@@ -14,9 +14,9 @@
 //   `XILINX_ADAPTER_WIRE(cc, CC, cc_bus)
 //=============================================================================
 `define XILINX_ADAPTER_WIRE(ch, CH, BUS)                                                            \
-  uvm_config_db#(virtual axis_if #(`XILINX_DATA_W,4,4,`XILINX_``CH``_TUSER_W,0,1,1))::set(          \
+  uvm_config_db#(virtual axis_if #(`XILINX_DATA_W,4,4,`XILINX_``CH``_TUSER_W,0,1,1,`XILINX_KEEP_W))::set(          \
       null, "uvm_test_top.env.rc_adapter*.``ch``_agent*", "vif", BUS);                              \
-  uvm_config_db#(virtual axis_if #(`XILINX_DATA_W,4,4,`XILINX_``CH``_TUSER_W,0,1,1))::set(          \
+  uvm_config_db#(virtual axis_if #(`XILINX_DATA_W,4,4,`XILINX_``CH``_TUSER_W,0,1,1,`XILINX_KEEP_W))::set(          \
       null, "uvm_test_top.env.ep_adapter*.``ch``_agent*", "vif", BUS);
 
 //=============================================================================
@@ -37,13 +37,13 @@
 // active RC must not drive — there is no tready source.)
 //=============================================================================
 `define XILINX_ADAPTER_WIRE_IDX(ROLE, IDX, RQBUS, RCBUS, CQBUS, CCBUS)                              \
-  uvm_config_db#(virtual axis_if #(`XILINX_DATA_W,4,4,`XILINX_RQ_TUSER_W,0,1,1))::set(              \
+  uvm_config_db#(virtual axis_if #(`XILINX_DATA_W,4,4,`XILINX_RQ_TUSER_W,0,1,1,`XILINX_KEEP_W))::set(              \
       null, $sformatf("uvm_test_top.env.%s_adapter_%0d.rq_agent*", ROLE, IDX), "vif", RQBUS);       \
-  uvm_config_db#(virtual axis_if #(`XILINX_DATA_W,4,4,`XILINX_RC_TUSER_W,0,1,1))::set(              \
+  uvm_config_db#(virtual axis_if #(`XILINX_DATA_W,4,4,`XILINX_RC_TUSER_W,0,1,1,`XILINX_KEEP_W))::set(              \
       null, $sformatf("uvm_test_top.env.%s_adapter_%0d.rc_agent*", ROLE, IDX), "vif", RCBUS);       \
-  uvm_config_db#(virtual axis_if #(`XILINX_DATA_W,4,4,`XILINX_CQ_TUSER_W,0,1,1))::set(              \
+  uvm_config_db#(virtual axis_if #(`XILINX_DATA_W,4,4,`XILINX_CQ_TUSER_W,0,1,1,`XILINX_KEEP_W))::set(              \
       null, $sformatf("uvm_test_top.env.%s_adapter_%0d.cq_agent*", ROLE, IDX), "vif", CQBUS);       \
-  uvm_config_db#(virtual axis_if #(`XILINX_DATA_W,4,4,`XILINX_CC_TUSER_W,0,1,1))::set(              \
+  uvm_config_db#(virtual axis_if #(`XILINX_DATA_W,4,4,`XILINX_CC_TUSER_W,0,1,1,`XILINX_KEEP_W))::set(              \
       null, $sformatf("uvm_test_top.env.%s_adapter_%0d.cc_agent*", ROLE, IDX), "vif", CCBUS);
 
 `define XILINX_ADAPTER_WIRE_EP(IDX, RQBUS, RCBUS, CQBUS, CCBUS)                                     \

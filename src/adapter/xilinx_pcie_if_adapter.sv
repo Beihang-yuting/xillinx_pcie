@@ -365,7 +365,9 @@ class xilinx_pcie_if_adapter extends pcie_tl_if_adapter;
             tuser_val = encode_tuser_for_beat(tlp, channel, beats[i], i,
                                               num_beats, lasts[i], keeps[i]);
             xfer.tdata = beats[i];
-            xfer.tkeep = expand_dw_keep_to_byte(keeps[i]);
+            // PG213: axis_if tkeep 为 per-DWORD (每 DW 1 位)，直接放 per-DW keep。
+            // driver 整体赋值 vif.tkeep<=xfer.tkeep 自动取低 TDATA/32 位。
+            xfer.tkeep = keeps[i];
             xfer.tlast = lasts[i];
             xfer.tuser = tuser_val;
             // first-beat 1-cycle idle so tvalid drops >=1 cycle after prior tlast
@@ -381,20 +383,6 @@ class xilinx_pcie_if_adapter extends pcie_tl_if_adapter;
         end
     endtask
 
-    protected function bit [63:0] expand_dw_keep_to_byte(bit [15:0] dw_keep);
-        bit [63:0] bk = '0;
-        for (int dw = 0; dw < 16; dw++)
-            if (dw_keep[dw]) bk[dw*4 +: 4] = 4'hF;
-        return bk;
-    endfunction
-
-    static function bit [15:0] compress_byte_keep_to_dw(bit [63:0] byte_keep);
-        bit [15:0] dk = '0;
-        for (int dw = 0; dw < 16; dw++)
-            if (byte_keep[dw*4 +: 4] != 4'h0) dk[dw] = 1'b1;
-        return dk;
-    endfunction
-
     protected function bit [511:0] encode_tuser_for_beat(
         pcie_tl_tlp tlp, xilinx_channel_e channel, bit [511:0] tdata,
         int beat_idx, int num_beats, bit is_last, bit [15:0] dw_keep = 16'hFFFF);
@@ -404,30 +392,35 @@ class xilinx_pcie_if_adapter extends pcie_tl_if_adapter;
                 bit [3:0]   first_be, last_be;
                 bit [1:0]   tag_9_8;
                 bit [284:0] tuser_full;
+                bit [3:0]   eop_off;
                 extract_be_from_tlp(tlp, first_be, last_be);
                 tag_9_8 = tlp.tag[9:8];
+                eop_off = (is_last && straddle_eng.straddle_enable) ?
+                          straddle_eng.calc_eop_offset(dw_keep) : 4'h0;
                 tuser_full = tuser_codec.encode_rq_tuser(
                     .first_be(beat_idx == 0 ? first_be : 4'h0),
                     .last_be (beat_idx == 0 ? last_be  : 4'h0),
                     .addr_offset(3'h0), .discontinue(1'b0),
                     .tph_present(1'b0), .tph_type(2'h0), .tph_st_tag(8'h0),
                     .seq_num_0(6'h0), .seq_num_1(6'h0),
-                    .tag_9_8(beat_idx == 0 ? tag_9_8 : 2'h0), .tdata(tdata));
+                    .tag_9_8(beat_idx == 0 ? tag_9_8 : 2'h0),
+                    .sop(beat_idx == 0), .is_eop(is_last), .eop_ptr(eop_off),
+                    .tdata(tdata));
                 tuser_truncated = tuser_full;
             end
             XILINX_CH_RC: begin
                 bit [63:0]  byte_en;
                 bit [320:0] tuser_full;
                 int byte_lanes = DATA_WIDTH / 8;
-                bit [2:0]   eof_off;
+                bit [3:0]   eof_off;
                 byte_en = '0;
                 for (int b = 0; b < byte_lanes; b++) byte_en[b] = 1'b1;
                 eof_off = (is_last && straddle_eng.straddle_enable) ?
-                          straddle_eng.calc_eop_offset(dw_keep) : 3'h0;
+                          straddle_eng.calc_eop_offset(dw_keep) : 4'h0;
                 tuser_full = tuser_codec.encode_rc_tuser(
                     .byte_en(byte_en), .is_sof_0(beat_idx == 0), .is_sof_1(1'b0),
                     .is_eof_0(is_last), .eof_offset_0(eof_off), .is_eof_1(1'b0),
-                    .eof_offset_1(3'h0), .discontinue(1'b0), .tdata(tdata));
+                    .eof_offset_1(4'h0), .discontinue(1'b0), .tdata(tdata));
                 tuser_truncated = tuser_full;
             end
             XILINX_CH_CQ: begin
@@ -436,26 +429,32 @@ class xilinx_pcie_if_adapter extends pcie_tl_if_adapter;
                 bit [1:0]   tag_9_8;
                 bit [374:0] tuser_full;
                 int byte_lanes = DATA_WIDTH / 8;
-                bit [2:0]   eop_off;
+                bit [3:0]   eop_off;
                 extract_be_from_tlp(tlp, first_be, last_be);
                 tag_9_8 = tlp.tag[9:8];
                 byte_en = '0;
                 for (int b = 0; b < byte_lanes; b++) byte_en[b] = 1'b1;
                 eop_off = (is_last && straddle_eng.straddle_enable) ?
-                          straddle_eng.calc_eop_offset(dw_keep) : 3'h0;
+                          straddle_eng.calc_eop_offset(dw_keep) : 4'h0;
                 tuser_full = tuser_codec.encode_cq_tuser(
                     .first_be(beat_idx == 0 ? first_be : 4'h0),
                     .last_be (beat_idx == 0 ? last_be  : 4'h0),
                     .byte_en(byte_en), .sop(beat_idx == 0), .sop_1(1'b0),
                     .discontinue(1'b0), .tph_present(1'b0), .tph_type(2'h0),
                     .tph_st_tag(8'h0), .is_eop(is_last), .eop_offset(eop_off),
-                    .is_eop_1(1'b0), .eop_offset_1(3'h0),
+                    .is_eop_1(1'b0), .eop_offset_1(4'h0),
                     .tag_9_8(beat_idx == 0 ? tag_9_8 : 2'h0), .tdata(tdata));
                 tuser_truncated = tuser_full;
             end
             XILINX_CH_CC: begin
                 bit [160:0] tuser_full;
-                tuser_full = tuser_codec.encode_cc_tuser(.discontinue(1'b0), .tdata(tdata));
+                bit [3:0]   eop_off;
+                eop_off = (is_last && straddle_eng.straddle_enable) ?
+                          straddle_eng.calc_eop_offset(dw_keep) : 4'h0;
+                tuser_full = tuser_codec.encode_cc_tuser(
+                    .discontinue(1'b0),
+                    .sop(beat_idx == 0), .is_eop(is_last), .eop_ptr(eop_off),
+                    .tdata(tdata));
                 tuser_truncated = tuser_full;
             end
             default: begin
@@ -501,7 +500,9 @@ class xilinx_pcie_if_adapter extends pcie_tl_if_adapter;
         first_tuser = pkt.beats[0].tuser;
         foreach (pkt.beats[i]) begin
             beats.push_back(pkt.beats[i].tdata);
-            keeps.push_back(compress_byte_keep_to_dw(pkt.beats[i].tkeep));
+            // PG213: tkeep 已为 per-DWORD，monitor 采样进 pkt.beats[i].tkeep 低位，
+            // 直接取低 16 位 (最多 16 DW) 作为 per-DW keep。
+            keeps.push_back(pkt.beats[i].tkeep[15:0]);
         end
 
         straddle_eng.unpack_single_tlp(beats, keeps, channel, descriptor, payload);
@@ -540,7 +541,7 @@ class xilinx_pcie_if_adapter extends pcie_tl_if_adapter;
             end
             XILINX_CH_CQ: begin
                 bit [3:0] fb, lb; bit [63:0] be; bit sop, sop1, dis, tp;
-                bit [1:0] tt; bit [7:0] tst; bit eop, eop1; bit [2:0] eo, eo1;
+                bit [1:0] tt; bit [7:0] tst; bit eop, eop1; bit [3:0] eo, eo1;
                 tuser_codec.decode_cq_tuser(.tuser(tuser[374:0]),
                     .first_be(fb), .last_be(lb), .byte_en(be), .sop(sop),
                     .sop_1(sop1), .discontinue(dis), .tph_present(tp),
@@ -574,7 +575,7 @@ class xilinx_pcie_if_adapter extends pcie_tl_if_adapter;
             end
             XILINX_CH_CQ: begin
                 bit [3:0] fb, lb; bit [63:0] be; bit sop, sop1, dis, tp;
-                bit [1:0] tt; bit [7:0] tst; bit eop, eop1; bit [2:0] eo, eo1;
+                bit [1:0] tt; bit [7:0] tst; bit eop, eop1; bit [3:0] eo, eo1;
                 bit [1:0] t98;
                 tuser_codec.decode_cq_tuser(.tuser(tuser[374:0]),
                     .first_be(fb), .last_be(lb), .byte_en(be), .sop(sop),

@@ -31,10 +31,10 @@ module tb_adapter_top;
   end
 
   // 4 shared channel buses (TUSER width per PG213 channel)
-  axis_if #(`XILINX_DATA_W,4,4,`XILINX_RQ_TUSER_W,0,1,1) rq_bus(.aclk(clk), .aresetn(rst_n));
-  axis_if #(`XILINX_DATA_W,4,4,`XILINX_RC_TUSER_W,0,1,1) rc_bus(.aclk(clk), .aresetn(rst_n));
-  axis_if #(`XILINX_DATA_W,4,4,`XILINX_CQ_TUSER_W,0,1,1) cq_bus(.aclk(clk), .aresetn(rst_n));
-  axis_if #(`XILINX_DATA_W,4,4,`XILINX_CC_TUSER_W,0,1,1) cc_bus(.aclk(clk), .aresetn(rst_n));
+  axis_if #(`XILINX_DATA_W,4,4,`XILINX_RQ_TUSER_W,0,1,1,`XILINX_KEEP_W) rq_bus(.aclk(clk), .aresetn(rst_n));
+  axis_if #(`XILINX_DATA_W,4,4,`XILINX_RC_TUSER_W,0,1,1,`XILINX_KEEP_W) rc_bus(.aclk(clk), .aresetn(rst_n));
+  axis_if #(`XILINX_DATA_W,4,4,`XILINX_CQ_TUSER_W,0,1,1,`XILINX_KEEP_W) cq_bus(.aclk(clk), .aresetn(rst_n));
+  axis_if #(`XILINX_DATA_W,4,4,`XILINX_CC_TUSER_W,0,1,1,`XILINX_KEEP_W) cc_bus(.aclk(clk), .aresetn(rst_n));
 
   // cfg_interrupt sideband (PG213) for the interrupt agent + SVA checker
   xilinx_pcie_cfg_if cfg_bus(.clk(clk), .rst_n(rst_n));

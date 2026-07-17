@@ -15,10 +15,10 @@ package xilinx_pcie_adapter_pkg;
   bit g_xilinx_adapter_quiesce = 0;
 
   // ---- Per-channel parameterized axis_agent typedefs (PG213 widths) ----
-  typedef axis_agent#(`XILINX_DATA_W,4,4,`XILINX_RQ_TUSER_W,0,1,1) axis_agent_rq_t;
-  typedef axis_agent#(`XILINX_DATA_W,4,4,`XILINX_RC_TUSER_W,0,1,1) axis_agent_rc_t;
-  typedef axis_agent#(`XILINX_DATA_W,4,4,`XILINX_CQ_TUSER_W,0,1,1) axis_agent_cq_t;
-  typedef axis_agent#(`XILINX_DATA_W,4,4,`XILINX_CC_TUSER_W,0,1,1) axis_agent_cc_t;
+  typedef axis_agent#(`XILINX_DATA_W,4,4,`XILINX_RQ_TUSER_W,0,1,1,`XILINX_KEEP_W) axis_agent_rq_t;
+  typedef axis_agent#(`XILINX_DATA_W,4,4,`XILINX_RC_TUSER_W,0,1,1,`XILINX_KEEP_W) axis_agent_rc_t;
+  typedef axis_agent#(`XILINX_DATA_W,4,4,`XILINX_CQ_TUSER_W,0,1,1,`XILINX_KEEP_W) axis_agent_cq_t;
+  typedef axis_agent#(`XILINX_DATA_W,4,4,`XILINX_CC_TUSER_W,0,1,1,`XILINX_KEEP_W) axis_agent_cc_t;
 
   // Xilinx types (enums, tuser-width helper functions) — no env_config dependency
   `include "xilinx_pcie_types.sv"

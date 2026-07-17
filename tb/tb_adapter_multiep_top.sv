@@ -31,16 +31,16 @@ module tb_adapter_multiep_top;
   end
 
   // EP0 independent link (4 channels)
-  axis_if #(`XILINX_DATA_W,4,4,`XILINX_RQ_TUSER_W,0,1,1) ep0_rq(.aclk(clk), .aresetn(rst_n));
-  axis_if #(`XILINX_DATA_W,4,4,`XILINX_RC_TUSER_W,0,1,1) ep0_rc(.aclk(clk), .aresetn(rst_n));
-  axis_if #(`XILINX_DATA_W,4,4,`XILINX_CQ_TUSER_W,0,1,1) ep0_cq(.aclk(clk), .aresetn(rst_n));
-  axis_if #(`XILINX_DATA_W,4,4,`XILINX_CC_TUSER_W,0,1,1) ep0_cc(.aclk(clk), .aresetn(rst_n));
+  axis_if #(`XILINX_DATA_W,4,4,`XILINX_RQ_TUSER_W,0,1,1,`XILINX_KEEP_W) ep0_rq(.aclk(clk), .aresetn(rst_n));
+  axis_if #(`XILINX_DATA_W,4,4,`XILINX_RC_TUSER_W,0,1,1,`XILINX_KEEP_W) ep0_rc(.aclk(clk), .aresetn(rst_n));
+  axis_if #(`XILINX_DATA_W,4,4,`XILINX_CQ_TUSER_W,0,1,1,`XILINX_KEEP_W) ep0_cq(.aclk(clk), .aresetn(rst_n));
+  axis_if #(`XILINX_DATA_W,4,4,`XILINX_CC_TUSER_W,0,1,1,`XILINX_KEEP_W) ep0_cc(.aclk(clk), .aresetn(rst_n));
 
   // EP1 independent link (4 channels)
-  axis_if #(`XILINX_DATA_W,4,4,`XILINX_RQ_TUSER_W,0,1,1) ep1_rq(.aclk(clk), .aresetn(rst_n));
-  axis_if #(`XILINX_DATA_W,4,4,`XILINX_RC_TUSER_W,0,1,1) ep1_rc(.aclk(clk), .aresetn(rst_n));
-  axis_if #(`XILINX_DATA_W,4,4,`XILINX_CQ_TUSER_W,0,1,1) ep1_cq(.aclk(clk), .aresetn(rst_n));
-  axis_if #(`XILINX_DATA_W,4,4,`XILINX_CC_TUSER_W,0,1,1) ep1_cc(.aclk(clk), .aresetn(rst_n));
+  axis_if #(`XILINX_DATA_W,4,4,`XILINX_RQ_TUSER_W,0,1,1,`XILINX_KEEP_W) ep1_rq(.aclk(clk), .aresetn(rst_n));
+  axis_if #(`XILINX_DATA_W,4,4,`XILINX_RC_TUSER_W,0,1,1,`XILINX_KEEP_W) ep1_rc(.aclk(clk), .aresetn(rst_n));
+  axis_if #(`XILINX_DATA_W,4,4,`XILINX_CQ_TUSER_W,0,1,1,`XILINX_KEEP_W) ep1_cq(.aclk(clk), .aresetn(rst_n));
+  axis_if #(`XILINX_DATA_W,4,4,`XILINX_CC_TUSER_W,0,1,1,`XILINX_KEEP_W) ep1_cc(.aclk(clk), .aresetn(rst_n));
 
   initial begin
     `XILINX_ADAPTER_WIRE_EP(0, ep0_rq, ep0_rc, ep0_cq, ep0_cc)
