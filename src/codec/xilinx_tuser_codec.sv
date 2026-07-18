@@ -46,11 +46,11 @@ class xilinx_tuser_codec;
     // Parity 计算辅助函数
     //=========================================================================
 
-    // calc_byte_parity: 计算单字节的奇偶校验位
-    // 对字节内所有位执行 XOR，结果为 1 表示奇数个 1（奇校验）
+    // calc_byte_parity: 计算单字节的奇校验位（PG213 tuser 为 ODD parity）
+    // odd parity：校验位使 {byte, parity} 的 1 的总数为奇数，即 ~(^b)。
     static function bit calc_byte_parity(bit [7:0] b);
-        // 将 8 位全部 XOR 折叠，得到单 bit 校验值
-        return ^b;
+        // ^b = 1 表示字节内 1 的个数为奇；odd parity 位取反 -> ~^b
+        return ~(^b);
     endfunction : calc_byte_parity
 
     // calc_parity: 计算 tdata 中有效字节的逐字节奇偶校验

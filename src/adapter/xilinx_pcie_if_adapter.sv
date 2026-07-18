@@ -383,6 +383,38 @@ class xilinx_pcie_if_adapter extends pcie_tl_if_adapter;
         end
     endtask
 
+    // build_byte_en: construct m_axis_{cq,rc}_tuser.byte_en for ONE beat.
+    // PG213: byte_en marks valid PAYLOAD bytes on tdata and is NOT asserted for
+    // descriptor bytes. Returns 0 when the TLP carries no payload (e.g. MemRd /
+    // data-less completion). For payload DWs, boundary DWs use first_be/last_be
+    // (single-DW payload uses first_be), interior DWs are full (0xF).
+    //   desc_dw    : descriptor DW count occupying beat-0 low lanes (RQ/CQ=4, RC/CC=3)
+    //   total_pl_dw: total payload length in DW (tlp.length; 0 => 1024)
+    protected function bit [63:0] build_byte_en(
+        int beat_idx, bit [15:0] dw_keep, bit has_payload, int desc_dw,
+        bit [3:0] first_be, bit [3:0] last_be, int total_pl_dw);
+        bit [63:0] be;
+        int lanes = DATA_WIDTH / 32;         // DW lanes per beat
+        int pl_len = (total_pl_dw == 0) ? 1024 : total_pl_dw;
+        be = '0;
+        if (!has_payload) return be;         // reads / data-less completions -> 0
+        for (int j = 0; j < lanes; j++) begin
+            int pl_idx;
+            bit [3:0] dwbe;
+            if (!dw_keep[j]) continue;
+            if (beat_idx == 0 && j < desc_dw) continue;   // skip descriptor DWs
+            pl_idx = (beat_idx == 0) ? (j - desc_dw)
+                                     : ((lanes - desc_dw) + (beat_idx - 1)*lanes + j);
+            if (pl_idx < 0) continue;
+            if (pl_len <= 1)                   dwbe = first_be;   // single payload DW
+            else if (pl_idx == 0)              dwbe = first_be;   // first DW
+            else if (pl_idx == pl_len - 1)     dwbe = last_be;    // last DW
+            else                               dwbe = 4'hF;       // interior DW
+            be[4*j +: 4] = dwbe;
+        end
+        return be;
+    endfunction
+
     protected function bit [511:0] encode_tuser_for_beat(
         pcie_tl_tlp tlp, xilinx_channel_e channel, bit [511:0] tdata,
         int beat_idx, int num_beats, bit is_last, bit [15:0] dw_keep = 16'hFFFF);
@@ -411,10 +443,12 @@ class xilinx_pcie_if_adapter extends pcie_tl_if_adapter;
             XILINX_CH_RC: begin
                 bit [63:0]  byte_en;
                 bit [320:0] tuser_full;
-                int byte_lanes = DATA_WIDTH / 8;
                 bit [3:0]   eof_off;
-                byte_en = '0;
-                for (int b = 0; b < byte_lanes; b++) byte_en[b] = 1'b1;
+                // PG213: byte_en marks valid payload bytes only (0 for data-less Cpl);
+                // RC descriptor = 3 DW. Completion payload is DW-granular in the BFM,
+                // so boundary DWs use 0xF (partial first/last-DW masking not modeled).
+                byte_en = build_byte_en(beat_idx, dw_keep, tlp.has_data(),
+                                        3, 4'hF, 4'hF, tlp.length);
                 eof_off = (is_last && straddle_eng.straddle_enable) ?
                           straddle_eng.calc_eop_offset(dw_keep) : 4'h0;
                 tuser_full = tuser_codec.encode_rc_tuser(
@@ -428,12 +462,13 @@ class xilinx_pcie_if_adapter extends pcie_tl_if_adapter;
                 bit [63:0]  byte_en;
                 bit [1:0]   tag_9_8;
                 bit [374:0] tuser_full;
-                int byte_lanes = DATA_WIDTH / 8;
                 bit [3:0]   eop_off;
                 extract_be_from_tlp(tlp, first_be, last_be);
                 tag_9_8 = tlp.tag[9:8];
-                byte_en = '0;
-                for (int b = 0; b < byte_lanes; b++) byte_en[b] = 1'b1;
+                // PG213: byte_en marks valid payload bytes only (0 for MemRd);
+                // CQ descriptor = 4 DW.
+                byte_en = build_byte_en(beat_idx, dw_keep, tlp.has_data(),
+                                        4, first_be, last_be, tlp.length);
                 eop_off = (is_last && straddle_eng.straddle_enable) ?
                           straddle_eng.calc_eop_offset(dw_keep) : 4'h0;
                 tuser_full = tuser_codec.encode_cq_tuser(
