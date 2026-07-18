@@ -415,6 +415,37 @@ class xilinx_pcie_if_adapter extends pcie_tl_if_adapter;
         return be;
     endfunction
 
+    // build_cpl_byte_en: byte_en for a completion beat (RC channel).
+    // A completion's valid bytes are CONTIGUOUS; the straddle packer places
+    // payload[0] at byte 0 of the first payload DW (DWORD-aligned, no offset),
+    // so valid bytes span [0 .. num_bytes-1] across the payload DWs. This marks
+    // the exact valid byte count per DW (last DW partial when num_bytes is not a
+    // multiple of 4), and 0 for a data-less completion (num_bytes == 0).
+    // NOTE: for an UNALIGNED completion (lower_addr[1:0] != 0) PG213 dword-aligned
+    // mode would shift the first valid byte to lower_addr[1:0]; the BFM does not
+    // model that leading offset in placement, so byte_en mirrors the byte-0
+    // placement it actually drives (self-consistent; see report for the limit).
+    protected function bit [63:0] build_cpl_byte_en(
+        int beat_idx, bit [15:0] dw_keep, int desc_dw, int num_bytes);
+        bit [63:0] be;
+        int lanes = DATA_WIDTH / 32;
+        be = '0;
+        if (num_bytes <= 0) return be;         // data-less completion -> 0
+        for (int j = 0; j < lanes; j++) begin
+            int pl_dw_idx;
+            int base_byte;
+            if (!dw_keep[j]) continue;
+            if (beat_idx == 0 && j < desc_dw) continue;   // skip descriptor DWs
+            pl_dw_idx = (beat_idx == 0) ? (j - desc_dw)
+                                        : ((lanes - desc_dw) + (beat_idx - 1)*lanes + j);
+            if (pl_dw_idx < 0) continue;
+            base_byte = pl_dw_idx * 4;                     // global payload byte index
+            for (int k = 0; k < 4; k++)
+                if (base_byte + k < num_bytes) be[4*j + k] = 1'b1;
+        end
+        return be;
+    endfunction
+
     protected function bit [511:0] encode_tuser_for_beat(
         pcie_tl_tlp tlp, xilinx_channel_e channel, bit [511:0] tdata,
         int beat_idx, int num_beats, bit is_last, bit [15:0] dw_keep = 16'hFFFF);
@@ -444,11 +475,10 @@ class xilinx_pcie_if_adapter extends pcie_tl_if_adapter;
                 bit [63:0]  byte_en;
                 bit [320:0] tuser_full;
                 bit [3:0]   eof_off;
-                // PG213: byte_en marks valid payload bytes only (0 for data-less Cpl);
-                // RC descriptor = 3 DW. Completion payload is DW-granular in the BFM,
-                // so boundary DWs use 0xF (partial first/last-DW masking not modeled).
-                byte_en = build_byte_en(beat_idx, dw_keep, tlp.has_data(),
-                                        3, 4'hF, 4'hF, tlp.length);
+                // PG213: RC byte_en marks the contiguous valid completion payload
+                // bytes (0 for data-less Cpl); RC descriptor = 3 DW. Exact per-byte
+                // mask from the completion payload length (partial last DW handled).
+                byte_en = build_cpl_byte_en(beat_idx, dw_keep, 3, tlp.payload.size());
                 eof_off = (is_last && straddle_eng.straddle_enable) ?
                           straddle_eng.calc_eop_offset(dw_keep) : 4'h0;
                 tuser_full = tuser_codec.encode_rc_tuser(
