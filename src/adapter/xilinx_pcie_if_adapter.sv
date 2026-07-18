@@ -619,6 +619,20 @@ class xilinx_pcie_if_adapter extends pcie_tl_if_adapter;
         return tag_9_8;
     endfunction
 
+    // be_to_byte_offset: byte offset (0..3) within the first DW = index of the
+    // lowest set bit of first_be. PG213/PCIe put the byte-level start of a
+    // request in first_be, not in the DW-aligned descriptor address; used to
+    // rebuild addr[1:0] on decode so downstream sees the exact byte address.
+    protected function bit [1:0] be_to_byte_offset(bit [3:0] fb);
+        casez (fb)
+            4'b???1: return 2'd0;
+            4'b??10: return 2'd1;
+            4'b?100: return 2'd2;
+            4'b1000: return 2'd3;
+            default: return 2'd0;   // fb == 0 (e.g. zero-length): offset 0
+        endcase
+    endfunction
+
     protected function void apply_tuser_be(pcie_tl_tlp tlp, bit [511:0] tuser,
                                            xilinx_channel_e channel);
         pcie_tl_mem_tlp mem_tlp;
@@ -634,8 +648,12 @@ class xilinx_pcie_if_adapter extends pcie_tl_if_adapter;
                     .tag_9_8(t98));
                 if ($cast(mem_tlp, tlp)) begin
                     mem_tlp.first_be = fb; mem_tlp.last_be = lb;
+                    // restore byte offset lost by DW-aligned descriptor addr
+                    // (PG213: header addr is DW-aligned, byte offset in first_be)
+                    mem_tlp.addr[1:0] = be_to_byte_offset(fb);
                 end else if ($cast(io_tlp, tlp)) begin
                     io_tlp.first_be = fb;
+                    io_tlp.addr[1:0] = be_to_byte_offset(fb);
                 end
             end
             XILINX_CH_CQ: begin
@@ -650,8 +668,12 @@ class xilinx_pcie_if_adapter extends pcie_tl_if_adapter;
                     .tag_9_8(t98));
                 if ($cast(mem_tlp, tlp)) begin
                     mem_tlp.first_be = fb; mem_tlp.last_be = lb;
+                    // restore byte offset lost by DW-aligned descriptor addr
+                    // (PG213: header addr is DW-aligned, byte offset in first_be)
+                    mem_tlp.addr[1:0] = be_to_byte_offset(fb);
                 end else if ($cast(io_tlp, tlp)) begin
                     io_tlp.first_be = fb;
+                    io_tlp.addr[1:0] = be_to_byte_offset(fb);
                 end
             end
             default: ;
