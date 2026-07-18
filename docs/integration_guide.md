@@ -262,7 +262,14 @@ ssh -p 2222 ryan@10.11.10.61 'source ~/set-env.sh >/dev/null 2>&1
 
 ## 6. 已知限制（诚实记录）
 
-- **Config-TLP 描述符字段布局为 BFM 内部自洽**：codec 的 CfgRd/CfgWr 描述符编解码做到了两端同 codec 的 round-trip（`encode_rq@RC → AXIS → decode_cq@EP` 字段保真，`cfg_test` 已验 `reg_num` / `completer_id` 等回环），但**未对照真实 PG213 config 描述符的线格式**。若对接真实 Xilinx IP 的 config 通道，需按 PG213 校准描述符位域。
+- **描述符位域已按 PG213 官方表逐位校准**（2026-07：RQ Table 2-22 / CQ 2-23 / RC 2-26 / CC 2-27 + config RQ）：
+  - `first_be`/`last_be` **不在描述符**，仅经 `s_axis_rq_tuser` / `m_axis_cq_tuser` 携带（此前误放 RQ desc `[111:104]`，占用了 Completer ID 区）。
+  - RQ：`[119:104]`=Completer ID、`[120]`=Req ID Enable、`[123:121]`=TC、`[126:124]`=Attr、`[127]`=Force ECRC。
+  - CQ：`[111:104]`=Target Function(8b)、`[114:112]`=BAR ID、`[120:115]`=BAR Aperture、`[123:121]`=TC、`[126:124]`=Attr。
+  - RC：`[11:0]`=Lower Addr、`[15:12]`=Error Code、`[28:16]`=Byte Count、`[91:89]`=TC、`[94:92]`=Attr。
+  - CC 独立于 RC（`encode_cc`/`decode_cc` 不再复用 RC）：`[9:8]`=AT、completer_id 拆 `[79:72]`+`[87:80]`、`[88]`=Completer ID Enable、`[95]`=Force ECRC。
+  - 回归守卫：`xilinx_pcie_adapter_codec_test`（纯 codec round-trip + PG213 位置断言，无需 vif/DUT）。
+  - **仍待硅上验证**：位域按官方文档核对，尚未对接真实 Xilinx 硬 IP 实测；模型侧受限字段（RC lower_addr 仅 7 位、Completer ID Enable/Req ID Enable 恒 0）见 codec 注释。
 - **cfg-read completion 的 `byte_count` 在上游被留 0**：PCIe 把 config-read 的 Byte Count 固定为 4，而上游 ep_driver 把 `cpl.byte_count` 留 0，故 e2e checker 对 `TLP_CFG_RD0/RD1` 完成**豁免** byte_count 校验（仍校验 tag 匹配 + 返回数据，证明送达）。
 - **adapter 不做协议判定**：注入的 poisoned / malformed 错误由上游 `pcie_tl_base_monitor` 在 EP 侧 `receive()` 路径处理；adapter 只做忠实编解码。`err_poisoned_test` 是**诊断性**的，不断言 pass，只观察上游 EP monitor 的反应。
 - **scoreboard 关闭**：SV_IF 模式下上游 scoreboard（`register_pending` 依赖 TLM loopback）不可用，端到端校验改由薄 `xilinx_pcie_e2e_checker` 承担。

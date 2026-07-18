@@ -15,6 +15,7 @@
 /tmp/xbuild/xilinx_pcie/src/interface/xilinx_pcie_cfg_sva.sv
 /tmp/xbuild/xilinx_pcie/tests/xilinx_pcie_adapter_base_test.sv
 /tmp/xbuild/xilinx_pcie/tests/xilinx_pcie_adapter_smoke_test.sv
+/tmp/xbuild/xilinx_pcie/tests/xilinx_pcie_adapter_codec_test.sv
 /tmp/xbuild/xilinx_pcie/tests/xilinx_pcie_adapter_cfg_test.sv
 /tmp/xbuild/xilinx_pcie/tests/xilinx_pcie_adapter_enum_dma_test.sv
 /tmp/xbuild/xilinx_pcie/tests/xilinx_pcie_adapter_rdwr_test.sv
