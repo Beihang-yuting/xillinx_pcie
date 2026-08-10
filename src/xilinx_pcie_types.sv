@@ -56,7 +56,11 @@ typedef enum bit [3:0] {
     XILINX_REQ_MRD_LK    = 4'b0100,   // Memory Read Locked 请求
     XILINX_REQ_FETCH_ADD = 4'b1000,   // AtomicOp FetchAdd 原子操作
     XILINX_REQ_SWAP      = 4'b1001,   // AtomicOp Swap 原子操作
-    XILINX_REQ_CAS       = 4'b1010    // AtomicOp Compare-and-Swap 原子操作
+    XILINX_REQ_CAS       = 4'b1010,   // AtomicOp Compare-and-Swap 原子操作
+    XILINX_REQ_CFGRD0    = 4'b1100,   // Type 0 Configuration Read 请求
+    XILINX_REQ_CFGWR0    = 4'b1101,   // Type 0 Configuration Write 请求
+    XILINX_REQ_CFGRD1    = 4'b1110,   // Type 1 Configuration Read 请求
+    XILINX_REQ_CFGWR1    = 4'b1111    // Type 1 Configuration Write 请求
 } xilinx_req_type_e;
 
 //-----------------------------------------------------------------------------
@@ -176,15 +180,15 @@ endclass : xilinx_desc_item
 //=============================================================================
 
 //-----------------------------------------------------------------------------
-// RQ 通道 tuser 宽度
-// 64b->62, 128b->62, 256b->137, 512b->285
+// RQ 通道 tuser 宽度 (PG213: 64/128/256 同宽 62, 512 为 137)
+// 64b->62, 128b->62, 256b->62, 512b->137
 //-----------------------------------------------------------------------------
 function automatic int xilinx_get_rq_tuser_width(int data_width);
     case (data_width)
         64:      return 62;
         128:     return 62;
-        256:     return 137;
-        512:     return 285;
+        256:     return 62;
+        512:     return 137;
         default: begin
             $fatal(1, "[xilinx_pcie] xilinx_get_rq_tuser_width: 不支持的数据宽度 %0d", data_width);
             return -1;
@@ -193,15 +197,15 @@ function automatic int xilinx_get_rq_tuser_width(int data_width);
 endfunction : xilinx_get_rq_tuser_width
 
 //-----------------------------------------------------------------------------
-// RC 通道 tuser 宽度
-// 64b->75, 128b->75, 256b->161, 512b->321
+// RC 通道 tuser 宽度 (PG213: 64/128/256 同宽 75, 512 为 161)
+// 64b->75, 128b->75, 256b->75, 512b->161
 //-----------------------------------------------------------------------------
 function automatic int xilinx_get_rc_tuser_width(int data_width);
     case (data_width)
         64:      return 75;
         128:     return 75;
-        256:     return 161;
-        512:     return 321;
+        256:     return 75;
+        512:     return 161;
         default: begin
             $fatal(1, "[xilinx_pcie] xilinx_get_rc_tuser_width: 不支持的数据宽度 %0d", data_width);
             return -1;
@@ -210,15 +214,15 @@ function automatic int xilinx_get_rc_tuser_width(int data_width);
 endfunction : xilinx_get_rc_tuser_width
 
 //-----------------------------------------------------------------------------
-// CQ 通道 tuser 宽度
-// 64b->88, 128b->88, 256b->183, 512b->375
+// CQ 通道 tuser 宽度 (PG213: 64/128/256 同宽 88, 512 为 183)
+// 64b->88, 128b->88, 256b->88, 512b->183
 //-----------------------------------------------------------------------------
 function automatic int xilinx_get_cq_tuser_width(int data_width);
     case (data_width)
         64:      return 88;
         128:     return 88;
-        256:     return 183;
-        512:     return 375;
+        256:     return 88;
+        512:     return 183;
         default: begin
             $fatal(1, "[xilinx_pcie] xilinx_get_cq_tuser_width: 不支持的数据宽度 %0d", data_width);
             return -1;
@@ -227,15 +231,15 @@ function automatic int xilinx_get_cq_tuser_width(int data_width);
 endfunction : xilinx_get_cq_tuser_width
 
 //-----------------------------------------------------------------------------
-// CC 通道 tuser 宽度
-// 64b->33, 128b->33, 256b->81, 512b->161
+// CC 通道 tuser 宽度 (PG213: 64/128/256 同宽 33, 512 为 81)
+// 64b->33, 128b->33, 256b->33, 512b->81
 //-----------------------------------------------------------------------------
 function automatic int xilinx_get_cc_tuser_width(int data_width);
     case (data_width)
         64:      return 33;
         128:     return 33;
-        256:     return 81;
-        512:     return 161;
+        256:     return 33;
+        512:     return 81;
         default: begin
             $fatal(1, "[xilinx_pcie] xilinx_get_cc_tuser_width: 不支持的数据宽度 %0d", data_width);
             return -1;
